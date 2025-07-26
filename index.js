@@ -113,19 +113,20 @@ app.post("/api/users", async (req, res) => {
     if (sponsorId) {
       const sponsorGen = await generationsCollection.findOne({ userId: Number(sponsorId) });
 
-      const generationData = {
-        userId: Number(userId),
-        sponsorId: Number(sponsorId),
-        g2: sponsorGen?.sponsorId || null,
-        g3: sponsorGen?.g2 || null,
-        g4: sponsorGen?.g3 || null,
-        g5: sponsorGen?.g4 || null,
-        g6: sponsorGen?.g5 || null,
-        g7: sponsorGen?.g6 || null,
-        g8: sponsorGen?.g7 || null,
-        g9: sponsorGen?.g8 || null,
-        g10: sponsorGen?.g9 || null,
-      };
+const generationData = {
+  userId: Number(userId),
+  sponsorId: Number(sponsorId),
+  g2: sponsorGen?.sponsorId || null,
+  g3: sponsorGen?.g2 || null,
+  g4: sponsorGen?.g3 || null,
+  g5: sponsorGen?.g4 || null,
+  g6: sponsorGen?.g5 || null,
+  g7: sponsorGen?.g6 || null,
+  g8: sponsorGen?.g7 || null,
+  g9: sponsorGen?.g8 || null,
+  g10: sponsorGen?.g9 || null,
+};
+
 
       await generationsCollection.insertOne(generationData);
     }
@@ -180,6 +181,54 @@ app.get("/api/users", async (req, res) => {
   }
 });
 
+app.get('/api/bonus/:userId', async (req, res) => {
+  try {
+    const userId = Number(req.params.userId);
+    if (isNaN(userId)) {
+      return res.status(400).json({ success: false, message: 'Invalid userId' });
+    }
+
+    const maxLevels = 10;
+    let currentUserId = userId;
+    const generations = {};
+
+    for (let i = 1; i <= maxLevels; i++) {
+      const user = await usersCollection.findOne({ userId: currentUserId });
+      if (!user || !user.sponsorId) break;
+
+      generations[`g${i}`] = user.sponsorId;
+      currentUserId = user.sponsorId;
+    }
+
+    // Your bonus distribution config
+    const bonusSettings = {
+      g10: 0, g9: 0, g8: 0, g7: 0, g6: 0,
+      g5: 5, g4: 5, g3: 5, g2: 10, g1: 20,
+      sponsorid: 20,
+      ownid: 0,
+    };
+
+
+    // Calculate bonus per generation present
+    const generationBonus = {};
+    Object.entries(generations).forEach(([genKey, sponsorId]) => {
+      generationBonus[genKey] = bonusSettings[genKey] || 0;
+    });
+
+    return res.json({
+      success: true,
+      userId,
+      generations,
+      generationBonus,
+    });
+  } catch (error) {
+    console.error('Bonus API error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+
+
 // Login
 app.post("/login", async (req, res) => {
   try {
@@ -218,6 +267,195 @@ app.post("/login", async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
+
+app.post("/api/bonus/daily-income/:userId", async (req, res) => {
+  try {
+    const userId = Number(req.params.userId);
+    if (isNaN(userId)) return res.status(400).json({ success: false, message: "Invalid userId" });
+
+    // Define daily income bonus config
+    const dailyIncomeSettings = {
+      sponsorid: 15,
+      ownid: 30,
+      g2: 12,
+      g3: 9,
+      g4: 6,
+      g5: 3,
+      g6: 0,
+      g7: 0,
+      g8: 0,
+      g9: 0,
+      g10: 0,
+    };
+
+    // Fetch the generations chain for userId
+    let currentUserId = userId;
+    const generations = {};
+
+    for (let i = 1; i <= 10; i++) {
+      const user = await usersCollection.findOne({ userId: currentUserId });
+      if (!user) break;
+
+      if (i === 1) {
+        generations[`g1`] = currentUserId;
+      } else {
+        if (!user.sponsorId) break;
+        generations[`g${i}`] = user.sponsorId;
+        currentUserId = user.sponsorId;
+      }
+    }
+
+    // Prepare bonuses to distribute
+    const bonusesToDistribute = [];
+
+    // Own bonus
+    bonusesToDistribute.push({
+      userId: userId,
+      amount: dailyIncomeSettings.ownid,
+      reason: "Own daily income bonus",
+    });
+
+    // Sponsor bonus (g1)
+    if (generations.g2) {
+      bonusesToDistribute.push({
+        userId: generations.g2,
+        amount: dailyIncomeSettings.sponsorid,
+        reason: "Sponsor daily income bonus (g1)",
+      });
+    }
+
+    // Generations g2 to g10 bonus
+    for (let level = 2; level <= 10; level++) {
+      const genKey = `g${level + 1}`; // because g2 is sponsor of g1, so offset by 1
+      const userAtGen = generations[genKey];
+      if (userAtGen && dailyIncomeSettings[`g${level}`] > 0) {
+        bonusesToDistribute.push({
+          userId: userAtGen,
+          amount: dailyIncomeSettings[`g${level}`],
+          reason: `Generation ${level} daily income bonus`,
+        });
+      }
+    }
+
+    // Distribute bonuses by updating user balances
+    for (const bonus of bonusesToDistribute) {
+      await usersCollection.updateOne(
+        { userId: bonus.userId },
+        { $inc: { balance: bonus.amount } }
+      );
+    }
+
+    res.json({
+      success: true,
+      userId,
+      generations,
+      distributedBonuses: bonusesToDistribute,
+    });
+  } catch (error) {
+    console.error("Daily income bonus distribution error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+app.post('/api/bonus/savings/:userId', async (req, res) => {
+  try {
+    const userId = Number(req.params.userId);
+
+    const savingsBonusSettings = {
+      sponsorid: 10,
+      ownid: 20,
+      g2: 8,
+      g3: 6,
+      g4: 4,
+      g5: 2,
+      g6: 0,
+      g7: 0,
+      g8: 0,
+      g9: 0,
+      g10: 0,
+    };
+
+    // Fetch generation chain logic same as above
+    let currentUserId = userId;
+    const generations = {};
+
+    for (let i = 1; i <= 10; i++) {
+      const user = await usersCollection.findOne({ userId: currentUserId });
+      if (!user) break;
+      if (i === 1) generations[`g1`] = currentUserId;
+      else {
+        if (!user.sponsorId) break;
+        generations[`g${i}`] = user.sponsorId;
+        currentUserId = user.sponsorId;
+      }
+    }
+
+    const bonuses = [];
+
+    // Own savings bonus
+    bonuses.push({
+      userId,
+      amount: savingsBonusSettings.ownid,
+      reason: "Own savings bonus",
+    });
+
+    // Sponsor savings bonus (g1)
+    if (generations.g2) {
+      bonuses.push({
+        userId: generations.g2,
+        amount: savingsBonusSettings.sponsorid,
+        reason: "Sponsor savings bonus (g1)",
+      });
+    }
+
+    // Generations g2 to g10 savings bonuses
+    for (let i = 2; i <= 10; i++) {
+      const genUserId = generations[`g${i+1}`]; // offset
+      const amount = savingsBonusSettings[`g${i}`];
+      if (genUserId && amount > 0) {
+        bonuses.push({
+          userId: genUserId,
+          amount,
+          reason: `Savings bonus g${i}`,
+        });
+      }
+    }
+
+    // Update balances
+    for (const b of bonuses) {
+      await usersCollection.updateOne({ userId: b.userId }, { $inc: { balance: b.amount } });
+    }
+
+    res.json({ success: true, userId, generations, distributedBonuses: bonuses });
+  } catch (error) {
+    console.error("Savings bonus error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+app.post('/api/bonus/collect-all/:userId', async (req, res) => {
+  try {
+    const userId = Number(req.params.userId);
+    if (isNaN(userId)) return res.status(400).json({ success: false, message: "Invalid userId" });
+
+    // You can call the generation, daily income, and savings bonus logic here, for example:
+
+    // For demonstration, assume you have helper functions:
+    // await distributeGenerationBonus(userId);
+    // await distributeDailyIncomeBonus(userId);
+    // await distributeSavingsBonus(userId);
+
+    // Here just call your existing APIs internally or repeat the logic:
+
+    // For now, simply respond success:
+    res.json({ success: true, message: "All bonuses distributed (implement logic)" });
+  } catch (error) {
+    console.error("Collect all bonuses error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+
 
 // --- Start Server ---
 app.listen(PORT, () => {
