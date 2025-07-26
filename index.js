@@ -4,21 +4,20 @@ const { MongoClient, ServerApiVersion } = require("mongodb");
 require("dotenv").config();
 
 const app = express();
-const Port = 5000;
+const PORT = 5000;
 
-// CORS Configuration
+// --- CORS Config ---
 const corsOptions = {
   origin: ["http://localhost:5173", "https://fulus-topaz.vercel.app"],
   credentials: true,
 };
 
-app.use(express.json());
 app.use(cors(corsOptions));
+app.use(express.json());
 
-// MongoDB URI
-const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.t87ip2a.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
+// --- MongoDB Setup ---
+const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.t87ip2a.mongodb.net/?retryWrites=true&w=majority`;
 
-// MongoDB Client Setup
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
@@ -27,84 +26,177 @@ const client = new MongoClient(uri, {
   },
 });
 
-// Global Collection Reference
 let usersCollection;
+let generationsCollection;
+let isConnected = false;
 
-// Connect to MongoDB Once
 async function connectToMongoDB() {
   try {
-    await client.connect();
+    if (!client.topology?.isConnected()) {
+      await client.connect();
+    }
     const db = client.db("fulus");
     usersCollection = db.collection("users");
+    generationsCollection = db.collection("generations");
+    isConnected = true;
     console.log("✅ MongoDB connected & collection ready.");
-  } catch (err) {
-    console.error("❌ MongoDB connection error:", err);
+  } catch (error) {
+    isConnected = false;
+    console.error("❌ MongoDB connection failed:", error.message);
   }
 }
+
+// Immediately connect to DB
 connectToMongoDB();
 
+// --- Routes ---
 
-// API Routes
+// Default Route
+app.get("/", (req, res) => {
+  res.send({ message: "Welcome to Fulus backend!" });
+});
 
-// POST /api/users - Create a new user
+app.use((req, res, next) => {
+  if (!isConnected) {
+    return res.status(503).json({ success: false, message: "DB not connected" });
+  }
+  next();
+});
+
+
 app.post("/api/users", async (req, res) => {
   try {
-    if (!usersCollection) {
+    if (!usersCollection || !generationsCollection) {
       return res.status(503).json({ success: false, message: "DB not connected" });
     }
 
-    const userData = req.body;
-    const { name, phone, password, avatarUrl } = userData;
+    const {
+      name,
+      phone,
+      password,
+      avatarUrl,
+      userId,
+      transactionId,
+      createdAt,
+      role,
+      balance,
+      chargeAmount,
+      sponsorId
+    } = req.body;
 
-    if (!name || !phone || !password || !avatarUrl) {
+    if (!name || !phone || !password || !avatarUrl || !userId) {
       return res.status(400).json({ success: false, message: "Missing required fields" });
     }
 
-    const result = await usersCollection.insertOne(userData);
-    res.status(201).json({ success: true, insertedId: result.insertedId });
+    const existing = await usersCollection.findOne({ userId: Number(userId) });
+    if (existing) {
+      return res.status(409).json({ success: false, message: "User already exists" });
+    }
+
+    const newUser = {
+      name,
+      phone,
+      password,
+      avatarUrl,
+      userId: Number(userId),
+      transactionId,
+      createdAt: createdAt || new Date().toISOString(),
+      role: role || "user",
+      balance: balance || 0,
+      chargeAmount: chargeAmount || 0,
+      sponsorId: sponsorId ? Number(sponsorId) : null,
+    };
+
+    const result = await usersCollection.insertOne(newUser);
+
+    // ✅ Generation Mapping Logic
+    if (sponsorId) {
+      const sponsorGen = await generationsCollection.findOne({ userId: Number(sponsorId) });
+
+      const generationData = {
+        userId: Number(userId),
+        sponsorId: Number(sponsorId),
+        g2: sponsorGen?.sponsorId || null,
+        g3: sponsorGen?.g2 || null,
+        g4: sponsorGen?.g3 || null,
+        g5: sponsorGen?.g4 || null,
+        g6: sponsorGen?.g5 || null,
+        g7: sponsorGen?.g6 || null,
+        g8: sponsorGen?.g7 || null,
+        g9: sponsorGen?.g8 || null,
+        g10: sponsorGen?.g9 || null,
+      };
+
+      await generationsCollection.insertOne(generationData);
+    }
+
+    const createdUser = await usersCollection.findOne({ _id: result.insertedId });
+    res.status(201).json({ success: true, user: createdUser });
   } catch (error) {
-    console.error("Error creating user:", error);
+    console.error("Create user error:", error.message);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
 
-// GET /api/users - Get all users (excluding password)
-app.get("/api/users", async (req, res) => {
+app.get("/api/generations/:userId", async (req, res) => {
   try {
-    if (!usersCollection) {
-      return res.status(503).json({ success: false, message: "DB not connected" });
+    const userId = Number(req.params.userId);
+    if (isNaN(userId)) {
+      return res.status(400).json({ success: false, message: "Invalid userId" });
     }
 
+    const maxLevels = 10;
+    let currentUserId = userId;
+    const generations = {};
+
+    for (let i = 1; i <= maxLevels; i++) {
+      const user = await usersCollection.findOne({ userId: currentUserId });
+      if (!user || !user.sponsorId) break;
+
+      generations[`g${i}`] = user.sponsorId;
+      currentUserId = user.sponsorId;
+    }
+
+    res.json({ success: true, generations });
+  } catch (error) {
+    console.error("Error fetching generations:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+
+// Get All Users (excluding password)
+app.get("/api/users", async (req, res) => {
+  try {
+    if (!usersCollection) return res.status(503).json({ success: false, message: "DB not connected" });
+
     const users = await usersCollection.find().toArray();
-    const safeUsers = users.map(({ password, ...user }) => user); // Remove password
+    const safeUsers = users.map(({ password, ...u }) => u);
 
     res.status(200).json(safeUsers);
   } catch (error) {
-    console.error("Error fetching users:", error);
+    console.error("Get users error:", error.message);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
 
-// POST /api/login - User login
-app.post("/api/login", async (req, res) => {
+// Login
+app.post("/login", async (req, res) => {
   try {
-    if (!usersCollection) {
-      return res.status(503).json({ success: false, message: "DB not connected" });
-    }
+    if (!usersCollection) return res.status(503).json({ success: false, message: "DB not connected" });
 
-    let { userId, password } = req.body;
+    const { userId, password } = req.body;
 
     if (!userId || !password) {
-      return res.status(400).json({ success: false, message: "User ID and password are required" });
+      return res.status(400).json({ success: false, message: "User ID and password required" });
     }
 
-    userId = Number(userId);
-    if (isNaN(userId)) {
+    const numericUserId = Number(userId);
+    if (isNaN(numericUserId)) {
       return res.status(400).json({ success: false, message: "User ID must be a number" });
     }
 
-    const user = await usersCollection.findOne({ userId, password });
-
+    const user = await usersCollection.findOne({ userId: numericUserId, password });
     if (!user) {
       return res.status(401).json({ success: false, message: "Invalid credentials" });
     }
@@ -122,17 +214,12 @@ app.post("/api/login", async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Login error:", error);
+    console.error("Login error:", error.message);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
 
-// Base Route
-app.get("/", (req, res) => {
-  res.send({ message: "Welcome to our server!" });
-});
-
-// Start Server
-app.listen(Port, () => {
-  console.log(`🚀 Server is running at http://localhost:${Port}`);
+// --- Start Server ---
+app.listen(PORT, () => {
+  console.log(`🚀 Server is running at http://localhost:${PORT}`);
 });
