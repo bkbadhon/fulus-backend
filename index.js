@@ -520,85 +520,81 @@ async function getReferralsTreeWithGenAndCount(userId, maxDepth = 10, currentDep
   return { referrals: results, count: totalCount };
 }
 
-// Flatten referrals helper (returns array of {userId, generation})
-function flattenReferrals(refList) {
-  let flat = [];
-  for (const ref of refList) {
-    flat.push({ userId: ref.userId, generation: ref.generation });
-    if (ref.referrals && ref.referrals.length) {
-      flat = flat.concat(flattenReferrals(ref.referrals));
-    }
-  }
-  return flat;
-}
-
 app.get('/api/bonus/by-generation/:userId', async (req, res) => {
   try {
     const userId = Number(req.params.userId);
     if (isNaN(userId)) return res.status(400).json({ success: false, message: "Invalid userId" });
 
-    // Get full referrals tree with generation info
     const { referrals } = await getReferralsTreeWithGenAndCount(userId);
 
-    // Flatten referrals to list with generation info
-    function flattenReferrals(refList) {
+    // Flatten referrals
+    const flattenReferrals = (refList) => {
       let flat = [];
       for (const ref of refList) {
         flat.push({ userId: ref.userId, generation: ref.generation });
-        if (ref.referrals && ref.referrals.length) {
+        if (ref.referrals?.length) {
           flat = flat.concat(flattenReferrals(ref.referrals));
         }
       }
       return flat;
-    }
-    const flatReferrals = flattenReferrals(referrals);
-
-    // Bonus config per generation
-    const bonusConfig = {
-      dailyBonus: {
-        own: 30,
-        gen1: 30, gen2: 25, gen3: 20, gen4: 15, gen5: 10, gen6: 5, gen7: 3, gen8: 2, gen9: 1, gen10: 0,
-      },
-      generationBonus: {
-        own: 0,
-        gen1: 20, gen2: 15, gen3: 10, gen4: 5, gen5: 3, gen6: 2, gen7: 1, gen8: 1, gen9: 1, gen10: 0,
-      },
-      savingsBonus: {
-        own: 20,
-        gen1: 20, gen2: 15, gen3: 10, gen4: 5, gen5: 3, gen6: 2, gen7: 1, gen8: 1, gen9: 1, gen10: 0,
-      },
     };
 
-    // Group bonuses by generation
-    const bonusesByGeneration = {};
+    const flatReferrals = flattenReferrals(referrals);
+    const totalReferrals = flatReferrals.length;
 
-    // Include own bonuses under 'own' key or gen0
-    bonusesByGeneration['own'] = [{
-      userId,
-      dailyBonus: bonusConfig.dailyBonus.own,
-      genBonus: bonusConfig.generationBonus.own,
-      savingsBonus: bonusConfig.savingsBonus.own,
-      bonusCollect: false,   // added here
-    }];
+    const bonusConfig = {
+      dailyBonus: {
+        own: 30, gen1: 30, gen2: 25, gen3: 20, gen4: 15, gen5: 10, gen6: 5, gen7: 3, gen8: 2, gen9: 1, gen10: 0
+      },
+      generationBonus: {
+        own: 0, gen1: 20, gen2: 15, gen3: 10, gen4: 5, gen5: 3, gen6: 2, gen7: 1, gen8: 1, gen9: 1, gen10: 0
+      },
+      savingsBonus: {
+        own: 20, gen1: 20, gen2: 15, gen3: 10, gen4: 5, gen5: 3, gen6: 2, gen7: 1, gen8: 1, gen9: 1, gen10: 0
+      }
+    };
+
+    const bonusesByGeneration = {
+      own: [{
+        id: 0,
+        userId,
+        dailyBonus: bonusConfig.dailyBonus.own,
+        genBonus: bonusConfig.generationBonus.own,
+        savingsBonus: bonusConfig.savingsBonus.own,
+        bonusCollect: await bonusesCollection.findOne({ userId, generation: "own", bonusCollect: true }) ? true : false
+      }]
+    };
+
+    const genMap = {};
 
     for (const ref of flatReferrals) {
-      const genKey = ref.generation; // "gen1", "gen2", ...
-
+      const genKey = ref.generation;
       if (!bonusesByGeneration[genKey]) bonusesByGeneration[genKey] = [];
+      if (!genMap[genKey]) genMap[genKey] = 0;
+
+      const isCollected = await bonusesCollection.findOne({
+        userId: userId,
+        fromUserId: ref.userId,
+        generation: genKey,
+        bonusCollect: true
+      });
 
       bonusesByGeneration[genKey].push({
+        id: genMap[genKey]++,
         userId: ref.userId,
         dailyBonus: bonusConfig.dailyBonus[genKey] || 0,
         genBonus: bonusConfig.generationBonus[genKey] || 0,
         savingsBonus: bonusConfig.savingsBonus[genKey] || 0,
-        bonusCollect: false,  // added here
+        bonusCollect: !!isCollected
       });
     }
 
+    // 👇 Include memberCount here
     res.json({
       success: true,
       userId,
-      bonusesByGeneration,
+      memberCount: totalReferrals,
+      bonusesByGeneration
     });
 
   } catch (error) {
@@ -610,46 +606,54 @@ app.get('/api/bonus/by-generation/:userId', async (req, res) => {
 
 
 
+
 app.post('/api/bonus/collect', async (req, res) => {
   try {
-    const { userId, genKey } = req.body;
-    if (!userId || !genKey) {
-      return res.status(400).json({ success: false, message: "Missing userId or genKey" });
+    const { userId, fromUserId, generation } = req.body;
+    if (!userId || !generation || !fromUserId) {
+      return res.status(400).json({ success: false, message: "Missing userId, fromUserId or generation" });
     }
 
-    // Update the bonusCollect flag to true for that user and generation in your bonus tracking collection
-    // Assuming you have a bonusesCollection tracking each bonus record:
-    await bonusesCollection.updateOne(
-      { userId, generation: genKey, bonusCollect: false },
-      { $set: { bonusCollect: true } }
-    );
+    // Prevent duplicate collection
+    const existing = await bonusesCollection.findOne({ userId, fromUserId, generation });
+    if (existing?.bonusCollect) {
+      return res.status(400).json({ success: false, message: "Bonus already collected" });
+    }
 
-    // Calculate bonuses to add for that user
     const bonusConfig = {
       dailyBonus: {
-        own: 30,
-        gen1: 30, gen2: 25, gen3: 20, gen4: 15, gen5: 10, gen6: 5, gen7: 3, gen8: 2, gen9: 1, gen10: 0,
+        own: 30, gen1: 30, gen2: 25, gen3: 20, gen4: 15, gen5: 10, gen6: 5, gen7: 3, gen8: 2, gen9: 1, gen10: 0
       },
       generationBonus: {
-        own: 0,
-        gen1: 20, gen2: 15, gen3: 10, gen4: 5, gen5: 3, gen6: 2, gen7: 1, gen8: 1, gen9: 1, gen10: 0,
+        own: 0, gen1: 20, gen2: 15, gen3: 10, gen4: 5, gen5: 3, gen6: 2, gen7: 1, gen8: 1, gen9: 1, gen10: 0
       },
       savingsBonus: {
-        own: 20,
-        gen1: 20, gen2: 15, gen3: 10, gen4: 5, gen5: 3, gen6: 2, gen7: 1, gen8: 1, gen9: 1, gen10: 0,
-      },
+        own: 20, gen1: 20, gen2: 15, gen3: 10, gen4: 5, gen5: 3, gen6: 2, gen7: 1, gen8: 1, gen9: 1, gen10: 0
+      }
     };
 
-    // Get the total number of referrals (member count)
-    // Assuming you have a function to get referral count:
+    const dailyBonus = bonusConfig.dailyBonus[generation] || 0;
+    const genBonus = bonusConfig.generationBonus[generation] || 0;
+    const savingsBonus = bonusConfig.savingsBonus[generation] || 0;
+
+    // Save collected bonus record
+    await bonusesCollection.updateOne(
+      { userId, fromUserId, generation },
+      {
+        $set: {
+          bonusCollect: true,
+          collectedAt: new Date(),
+          dailyBonus,
+          genBonus,
+          savingsBonus
+        }
+      },
+      { upsert: true }
+    );
+
     const memberCount = await usersCollection.countDocuments({ sponsorId: userId });
 
-    // Calculate bonuses for this genKey
-    const dailyBonus = bonusConfig.dailyBonus[genKey] || 0;
-    const genBonus = bonusConfig.generationBonus[genKey] || 0;
-    const savingsBonus = bonusConfig.savingsBonus[genKey] || 0;
-
-    // Update user collection: increment balance & store bonus stats
+    // Update user’s earnings
     await usersCollection.updateOne(
       { userId },
       {
@@ -658,18 +662,19 @@ app.post('/api/bonus/collect', async (req, res) => {
           generationBonus: genBonus,
           savings: savingsBonus,
           dailyIncome: dailyBonus,
-          memberCount: memberCount,
+          memberCount: memberCount
         }
-      },
-      { upsert: true }
+      }
     );
 
     res.json({ success: true, message: "Bonus collected successfully" });
+
   } catch (error) {
     console.error("Error collecting bonus:", error);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
+
 
 
 
