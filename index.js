@@ -183,6 +183,23 @@ app.get("/api/users", async (req, res) => {
   }
 });
 
+app.get('/api/users/:userId', async (req, res) => {
+  try {
+    const userId = Number(req.params.userId);
+    if (!userId) return res.status(400).json({ success: false, message: "Invalid userId" });
+
+    const user = await usersCollection.findOne({ userId });
+    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+
+    const { password, ...safeUser } = user;
+    res.status(200).json({ success: true, user: safeUser });
+  } catch (error) {
+    console.error("Get user error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+
 app.get('/api/bonus/:userId', async (req, res) => {
   try {
     const userId = Number(req.params.userId);
