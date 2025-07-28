@@ -1,5 +1,6 @@
 const express = require("express");
 const cors = require("cors");
+
 const { MongoClient, ServerApiVersion } = require("mongodb");
 require("dotenv").config();
 
@@ -28,7 +29,9 @@ const client = new MongoClient(uri, {
 
 let usersCollection;
 let generationsCollection;
-let bonusesCollection
+let bonusesCollection;
+let withdrawCollection
+
 let isConnected = false;
 
 async function connectToMongoDB() {
@@ -40,6 +43,7 @@ async function connectToMongoDB() {
     usersCollection = db.collection("users");
     generationsCollection = db.collection("generations");
     bonusesCollection = db.collection("bonuses");
+    withdrawCollection = db.collection("withdraws");
     isConnected = true;
     console.log("✅ MongoDB connected & collection ready.");
   } catch (error) {
@@ -803,6 +807,41 @@ app.post('/api/bonus/collect', async (req, res) => {
   } catch (error) {
     console.error("Error collecting bonus:", error);
     res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+
+app.post('/api/withdraw', async (req, res) => {
+  try {
+    const { userId, amount, method, accountNumber, address, type } = req.body;
+    if (!userId || !amount) {
+      return res.status(400).json({ success: false, message: 'Missing required fields' });
+    }
+
+    // Insert withdraw record (make sure withdrawCollection is connected)
+    const withdrawData = {
+      userId,
+      amount: Number(amount),
+      method,
+      accountNumber,
+      address,
+      type,
+      createdAt: new Date(),
+      status: 'pending'
+    };
+
+    const result = await withdrawCollection.insertOne(withdrawData);
+
+    if (!result.insertedId) {
+      throw new Error('Failed to create withdraw request');
+    }
+
+    // Optionally update user's balance here (if needed)
+
+    res.json({ success: true, message: 'Withdraw request created' });
+  } catch (error) {
+    console.error('Withdraw error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
