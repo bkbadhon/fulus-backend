@@ -622,6 +622,120 @@ app.get('/api/bonus/by-generation/:userId', async (req, res) => {
 
 
 
+app.get('/api/admin/referral-report', async (req, res) => {
+  try {
+    const users = await usersCollection.find().toArray();
+
+    const referralStats = await Promise.all(
+      users.map(async ({ password, ...user }) => {
+        const { count } = await getReferralsTreeWithGenAndCount(user.userId);
+        return {
+          ...user,
+          totalReferrals: count,
+        };
+      })
+    );
+
+    res.json({ success: true, users: referralStats });
+  } catch (error) {
+    console.error("Error generating referral report:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+// Rank all users by their total referral tree size (multi-generation)
+app.get('/api/admin/users-with-rank', async (req, res) => {
+  try {
+    const users = await usersCollection.find().toArray();
+
+    const referralData = [];
+
+    for (const user of users) {
+      // Validate userId exists and is valid number
+      if (!user.userId || typeof user.userId !== 'number') {
+        console.warn('Skipping user with invalid userId:', user);
+        continue;
+      }
+
+      try {
+        // Assuming your existing recursive function is available
+        const { count } = await getReferralsTreeWithGenAndCount(user.userId);
+
+        referralData.push({
+          userId: user.userId,
+          name: user.name,
+          phone: user.phone,
+          totalReferrals: count,
+        });
+      } catch (err) {
+        console.error(`Failed to count referrals for userId ${user.userId}:`, err.message);
+      }
+    }
+
+    // Sort descending by totalReferrals
+    referralData.sort((a, b) => b.totalReferrals - a.totalReferrals);
+
+    // Assign rank based on position in sorted array
+    const rankedUsers = referralData.map((user, idx) => ({
+      ...user,
+      rank: idx + 1,
+    }));
+
+    res.json({ success: true, users: rankedUsers });
+  } catch (error) {
+    console.error('Error fetching users with ranks:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+
+app.get('/api/users/:userId/rank', async (req, res) => {
+  try {
+    const userId = Number(req.params.userId);
+    if (isNaN(userId)) {
+      return res.status(400).json({ success: false, message: "Invalid userId" });
+    }
+
+    const users = await usersCollection.find().toArray();
+
+    // Calculate referral counts for all users (could be optimized)
+    const referralData = [];
+
+    for (const user of users) {
+      if (!user.userId || typeof user.userId !== 'number') continue;
+
+      const { count } = await getReferralsTreeWithGenAndCount(user.userId);
+      referralData.push({
+        userId: user.userId,
+        totalReferrals: count,
+      });
+    }
+
+    // Sort descending by referral count
+    referralData.sort((a, b) => b.totalReferrals - a.totalReferrals);
+
+    // Find rank of requested userId
+    const rankIndex = referralData.findIndex(u => u.userId === userId);
+
+    if (rankIndex === -1) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    const userRank = rankIndex + 1;
+    const userReferralCount = referralData[rankIndex].totalReferrals;
+
+    res.json({
+      success: true,
+      userId,
+      rank: userRank,
+      totalReferrals: userReferralCount,
+    });
+  } catch (error) {
+    console.error("Error fetching user rank:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
 
 
 app.post('/api/bonus/collect', async (req, res) => {
