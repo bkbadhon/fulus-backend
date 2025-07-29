@@ -848,6 +848,15 @@ app.post('/api/withdraw', async (req, res) => {
   }
 });
 
+app.get('/api/withdraw', async (req, res) => {
+  try {
+    const withdraws = await withdrawCollection.find({}).sort({ createdAt: -1 }).toArray();
+    res.json({ success: true, data: withdraws });
+  } catch (error) {
+    console.error('Withdraw fetch error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
 
 
 
