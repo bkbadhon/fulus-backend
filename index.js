@@ -836,7 +836,10 @@ app.post('/api/withdraw', async (req, res) => {
       throw new Error('Failed to create withdraw request');
     }
 
-    // Optionally update user's balance here (if needed)
+    await usersCollection.updateOne(
+  { userId: Number(userId) },
+  { $inc: { balance: -amount } }
+);
 
     res.json({ success: true, message: 'Withdraw request created' });
   } catch (error) {
