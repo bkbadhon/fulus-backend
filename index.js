@@ -30,7 +30,8 @@ const client = new MongoClient(uri, {
 let usersCollection;
 let generationsCollection;
 let bonusesCollection;
-let withdrawCollection
+let withdrawCollection;
+let transferCollection
 
 let isConnected = false;
 
@@ -44,6 +45,7 @@ async function connectToMongoDB() {
     generationsCollection = db.collection("generations");
     bonusesCollection = db.collection("bonuses");
     withdrawCollection = db.collection("withdraws");
+    transferCollection = db.collection("transfers");
     isConnected = true;
     console.log("✅ MongoDB connected & collection ready.");
   } catch (error) {
@@ -855,6 +857,52 @@ app.get('/api/withdraw', async (req, res) => {
   } catch (error) {
     console.error('Withdraw fetch error:', error);
     res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+app.post('/api/transfer', async (req, res) => {
+  try {
+    const { fromUserId, toUserId, amount } = req.body;
+
+    if (!fromUserId || !toUserId || !amount || amount <= 0) {
+      return res.status(400).json({ success: false, message: 'Invalid data' });
+    }
+
+    const fromUser = await usersCollection.findOne({ userId: parseInt(fromUserId) });
+    const toUser = await usersCollection.findOne({ userId: parseInt(toUserId) });
+
+    if (!fromUser || !toUser) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    if (fromUser.balance < amount) {
+      return res.status(400).json({ success: false, message: 'Insufficient balance' });
+    }
+
+    // Perform the balance transfer
+    await usersCollection.updateOne(
+      { userId: fromUser.userId },
+      { $inc: { balance: -amount } }
+    );
+
+    await usersCollection.updateOne(
+      { userId: toUser.userId },
+      { $inc: { balance: amount } }
+    );
+
+    // Optional: Record the transfer
+    await transferCollection.insertOne({
+      fromUserId: fromUser.userId,
+      toUserId: toUser.userId,
+      amount,
+      createdAt: new Date(),
+    });
+
+    res.json({ success: true, message: 'Transfer successful' });
+
+  } catch (err) {
+    console.error("Transfer error:", err);
+    res.status(500).json({ success: false, message: 'Internal server error' });
   }
 });
 
