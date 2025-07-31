@@ -31,7 +31,8 @@ let usersCollection;
 let generationsCollection;
 let bonusesCollection;
 let withdrawCollection;
-let transferCollection
+let transferCollection;
+let depositCollection
 
 let isConnected = false;
 
@@ -46,6 +47,7 @@ async function connectToMongoDB() {
     bonusesCollection = db.collection("bonuses");
     withdrawCollection = db.collection("withdraws");
     transferCollection = db.collection("transfers");
+    depositCollection = db.collection("deposits");
     isConnected = true;
     console.log("✅ MongoDB connected & collection ready.");
   } catch (error) {
@@ -815,40 +817,113 @@ app.post('/api/bonus/collect', async (req, res) => {
 
 app.post('/api/withdraw', async (req, res) => {
   try {
-    const { userId, amount, method, accountNumber, address, type } = req.body;
-    if (!userId || !amount) {
-      return res.status(400).json({ success: false, message: 'Missing required fields' });
+    const { userId, method, amount, deliveryAddress, contact } = req.body;
+    const withdrawAmount = Number(amount);
+
+    if (!userId || !withdrawAmount || withdrawAmount <= 0) {
+      return res.json({ success: false, message: 'Invalid withdraw request' });
     }
 
-    // Insert withdraw record (make sure withdrawCollection is connected)
-    const withdrawData = {
-      userId,
-      amount: Number(amount),
+    const user = await usersCollection.findOne({ userId: Number(userId) });
+    if (!user) {
+      return res.json({ success: false, message: 'User not found' });
+    }
+
+    const totalBalance = user.balance || 0;
+    const savings = user.savings || 0;
+    const daily = user.dailyIncome || 0;
+    const gen = user.generationBonus || 0;
+
+    if (totalBalance < withdrawAmount) {
+      return res.json({ success: false, message: 'Insufficient balance' });
+    }
+
+    // Deduct from balance
+    const newBalance = totalBalance - withdrawAmount;
+
+    // Sum of savings + daily + gen
+    const totalSubAccounts = savings + daily + gen;
+
+    let newSavings = savings;
+    let newDaily = daily;
+    let newGen = gen;
+
+    if (totalSubAccounts >= withdrawAmount) {
+      // Deduct withdrawAmount from savings, daily, gen in order
+
+      let remaining = withdrawAmount;
+
+      if (newSavings >= remaining) {
+        newSavings -= remaining;
+        remaining = 0;
+      } else {
+        remaining -= newSavings;
+        newSavings = 0;
+      }
+
+      if (remaining > 0) {
+        if (newDaily >= remaining) {
+          newDaily -= remaining;
+          remaining = 0;
+        } else {
+          remaining -= newDaily;
+          newDaily = 0;
+        }
+      }
+
+      if (remaining > 0) {
+        if (newGen >= remaining) {
+          newGen -= remaining;
+          remaining = 0;
+        } else {
+          // Should not happen because totalSubAccounts >= withdrawAmount
+          newGen = 0;
+          remaining = 0;
+        }
+      }
+    } else {
+      // If not enough in sub accounts, set all to zero
+      newSavings = 0;
+      newDaily = 0;
+      newGen = 0;
+    }
+
+    // Update user document
+    const updateResult = await usersCollection.updateOne(
+      { userId: Number(userId) },
+      {
+        $set: {
+          balance: newBalance,
+          savings: newSavings,
+          dailyIncome: newDaily,
+          generationBonus: newGen,
+        },
+      }
+    );
+
+    if (updateResult.modifiedCount === 0) {
+      return res.json({ success: false, message: 'Failed to update user balances' });
+    }
+
+    // Insert withdraw request
+    await withdrawCollection.insertOne({
+      userId: Number(userId),
       method,
-      accountNumber,
-      address,
-      type,
+      amount: withdrawAmount,
+      deliveryAddress,
+      contact,
+      status: 'Pending',
       createdAt: new Date(),
-      status: 'pending'
-    };
+    });
 
-    const result = await withdrawCollection.insertOne(withdrawData);
-
-    if (!result.insertedId) {
-      throw new Error('Failed to create withdraw request');
-    }
-
-    await usersCollection.updateOne(
-  { userId: Number(userId) },
-  { $inc: { balance: -amount } }
-);
-
-    res.json({ success: true, message: 'Withdraw request created' });
+    return res.json({ success: true, message: 'Withdraw request submitted successfully' });
   } catch (error) {
     console.error('Withdraw error:', error);
-    res.status(500).json({ success: false, message: 'Server error' });
+    return res.json({ success: false, message: 'Internal server error' });
   }
 });
+
+
 
 app.get('/api/withdraw', async (req, res) => {
   try {
@@ -906,6 +981,68 @@ app.post('/api/transfer', async (req, res) => {
   }
 });
 
+
+app.post('/api/deposit', async (req, res) => {
+    try {
+        const { userId, amount, transactionId, agentNumber } = req.body;
+
+        if (!userId || !amount || !transactionId || !agentNumber) {
+            return res.json({ success: false, message: 'All fields are required!' });
+        }
+
+        const depositData = {
+            userId: Number(userId),
+            amount: Number(amount),
+            transactionId,
+            agentNumber, // Store in DB
+            status: 'pending',
+            createdAt: new Date()
+        };
+
+        const result = await depositCollection.insertOne(depositData);
+
+        res.json({
+            success: true,
+            message: 'Deposit request received!',
+            depositId: result.insertedId
+        });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ success: false, message: 'Internal Server Error' });
+    }
+});
+
+// Example: Fetch agent info
+app.get('/api/agent-info', (req, res) => {
+    res.json({
+        success: true,
+        agent: {
+            name: 'Personal to Agent',
+            number: '+92372764223',
+        },
+    });
+});
+
+// Get transactions by userId
+app.get('/api/transactions/:userId', async (req, res) => {
+    const { userId } = req.params;
+
+    const deposits = await depositCollection
+        .find({ userId: Number(userId) })
+        .sort({ createdAt: -1 })
+        .toArray();
+
+    const withdraws = await withdrawCollection
+        .find({ userId: Number(userId) })
+        .sort({ createdAt: -1 })
+        .toArray();
+
+    // Combine and sort by date
+    const allTransactions = [...deposits.map(t => ({...t, type:'deposit'})), ...withdraws.map(t => ({...t, type:'withdraw'}))]
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    res.json({ success: true, transactions: allTransactions });
+});
 
 
 
