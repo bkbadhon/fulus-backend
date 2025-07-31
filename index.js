@@ -1,7 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 
-const { MongoClient, ServerApiVersion } = require("mongodb");
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 require("dotenv").config();
 
 const app = express();
@@ -9,7 +9,7 @@ const PORT = 5000;
 
 // --- CORS Config ---
 const corsOptions = {
-  origin: ["http://localhost:5173", "https://fulus-topaz.vercel.app"],
+  origin: ["http://localhost:5173", "https://fulus-topaz.vercel.app", 'http://localhost:5174'],
   credentials: true,
 };
 
@@ -190,6 +190,28 @@ app.get("/api/users", async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
+
+// DELETE user by userId
+app.delete("/api/users/:userId", async (req, res) => {
+  try {
+    if (!usersCollection)
+      return res.status(503).json({ success: false, message: "DB not connected" });
+
+    const userId = Number(req.params.userId); // convert to number
+
+    const result = await usersCollection.deleteOne({ userId: userId });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    res.status(200).json({ success: true, message: "User deleted successfully" });
+  } catch (error) {
+    console.error("Delete user error:", error.message);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
 
 app.get('/api/users/:userId', async (req, res) => {
   try {
@@ -935,6 +957,37 @@ app.get('/api/withdraw', async (req, res) => {
   }
 });
 
+
+
+// Approve or Reject withdraw
+app.patch("/api/withdraw/:id", async (req, res) => {
+  try {
+    const { status, userId, amount } = req.body;
+    const id = req.params.id;
+
+    if (!status) return res.json({ success: false, message: "Status is required" });
+
+    // Update withdraw status
+    const result = await withdrawCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { status } }
+    );
+
+    if (status === "rejected") {
+      // Refund amount to user balance
+      await usersCollection.updateOne(
+        { userId: Number(userId) },
+        { $inc: { balance: Number(amount) } }
+      );
+    }
+
+    return res.json({ success: result.modifiedCount > 0 });
+  } catch (error) {
+    console.error("Withdraw update error:", error);
+    return res.status(500).json({ success: false, message: "Internal Server Error" });
+  }
+});
+
 app.post('/api/transfer', async (req, res) => {
   try {
     const { fromUserId, toUserId, amount } = req.body;
@@ -1010,6 +1063,32 @@ app.post('/api/deposit', async (req, res) => {
         console.error(error);
         res.status(500).json({ success: false, message: 'Internal Server Error' });
     }
+});
+
+app.get("/api/deposit", async (req, res) => {
+  const deposits = await depositCollection.find().toArray();
+  res.json({ deposits });
+});
+
+app.patch("/api/deposit/:id", async (req, res) => {
+  try {
+    const { status } = req.body;
+    const id = req.params.id;
+
+    const result = await depositCollection.updateOne(
+      { _id: new ObjectId(id) }, // Convert string to ObjectId
+      { $set: { status } }
+    );
+
+    if (result.modifiedCount > 0) {
+      res.json({ success: true });
+    } else {
+      res.json({ success: false, message: "Deposit not found or status unchanged" });
+    }
+  } catch (error) {
+    console.error("Update error:", error);
+    res.status(500).json({ success: false, message: "Internal Server Error" });
+  }
 });
 
 // Example: Fetch agent info
