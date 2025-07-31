@@ -32,7 +32,9 @@ let generationsCollection;
 let bonusesCollection;
 let withdrawCollection;
 let transferCollection;
-let depositCollection
+let depositCollection;
+let agentCollection;
+let noticeCollection
 
 let isConnected = false;
 
@@ -48,6 +50,9 @@ async function connectToMongoDB() {
     withdrawCollection = db.collection("withdraws");
     transferCollection = db.collection("transfers");
     depositCollection = db.collection("deposits");
+    agentCollection = db.collection("agents");
+    noticeCollection = db.collection("notice");
+
     isConnected = true;
     console.log("✅ MongoDB connected & collection ready.");
   } catch (error) {
@@ -1091,16 +1096,77 @@ app.patch("/api/deposit/:id", async (req, res) => {
   }
 });
 
-// Example: Fetch agent info
-app.get('/api/agent-info', (req, res) => {
-    res.json({
-        success: true,
-        agent: {
-            name: 'Personal to Agent',
-            number: '+92372764223',
-        },
-    });
+
+// Create or Update agent info (POST)
+app.post('/api/agent-info', async (req, res) => {
+  try {
+    const { name, number } = req.body;
+    if (!name || !number) {
+      return res.status(400).json({ success: false, message: "Name and number are required" });
+    }
+
+    // Upsert: update if exists, else insert
+    const result = await agentCollection.updateOne(
+      {},
+      { $set: { name, number } },
+      { upsert: true }
+    );
+
+    res.json({ success: true, message: "Agent info saved" });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
 });
+// Get agent info
+app.get('/api/agent-info', async (req, res) => {
+  try {
+    const agent = await agentCollection.findOne({});
+    if (!agent) {
+      return res.json({
+        success: false,
+        message: "Agent info not found",
+      });
+    }
+    res.json({ success: true, agent });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+// Create or update notice
+app.post('/api/notice', async (req, res) => {
+  try {
+    const { content } = req.body;
+    if (!content) return res.status(400).json({ success: false, message: "Notice content is required" });
+
+    const result = await noticeCollection.updateOne(
+      {},
+      { $set: { content } },
+      { upsert: true }
+    );
+
+    res.json({ success: true, message: 'Notice saved' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+// Get current notice
+app.get('/api/notice', async (req, res) => {
+  try {
+    const notice = await noticeCollection.findOne({});
+    res.json({ success: true, notice: notice?.content || "" });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+
+
+
 
 // Get transactions by userId
 app.get('/api/transactions/:userId', async (req, res) => {
