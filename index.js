@@ -9,7 +9,7 @@ const PORT = 5000;
 
 // --- CORS Config ---
 const corsOptions = {
-  origin: ["http://localhost:5173", "https://fulus-topaz.vercel.app", 'http://localhost:5174'],
+  origin: ["http://localhost:5173", "https://fulus-topaz.vercel.app",'https://fulus-admin.vercel.app', 'http://localhost:5174'],
   credentials: true,
 };
 
