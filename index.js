@@ -1259,40 +1259,52 @@ app.post("/api/generation/collect", async (req, res) => {
         .json({ success: false, message: "Missing userId or amount" });
     }
 
-    // Get today's date string
-    const today = new Date().toISOString().split("T")[0];
+    // Convert userId to number to keep consistent
+    const userIdNum = Number(userId);
 
-    // Prevent multiple collections per day
-    const collectedToday = await genCollection.findOne({ userId, date: today });
+    // Check if today is Friday
+    const todayDate = new Date();
+    const dayOfWeek = todayDate.getDay(); // 0 = Sunday, 5 = Friday
+    if (dayOfWeek !== 5) {
+      return res.json({ success: false, message: "Withdrawals allowed only on Fridays" });
+    }
+
+    const todayStr = todayDate.toISOString().split("T")[0];
+
+    // Prevent multiple collections on the same day
+    const collectedToday = await genCollection.findOne({ userId: userIdNum, date: todayStr });
     if (collectedToday) {
       return res.json({ success: false, message: "Already collected today" });
     }
 
     // Insert collection record
     await genCollection.insertOne({
-      userId,
-      amount,
-      date: today,
+      userId: userIdNum,
+      amount: Number(amount),
+      date: todayStr,
       collectedAt: new Date(),
     });
 
-    // Auto add to user balance & generation bonus
+    // Update user: add to main balance and reduce generationBonus
     await usersCollection.updateOne(
-      { userId },
+      { userId: userIdNum },
       {
-        $inc: {
-          balance: amount, // Add to wallet balance
-          generationBonus: amount, // Track total generation bonus
-        },
+        $inc: { balance: Number(amount) },
+        $inc: { generationBonus: -Number(amount) },
       }
     );
 
-    res.json({ success: true, message: "Generation commission collected & added to balance!" });
+    res.json({
+      success: true,
+      message: "Generation commission collected successfully and added to balance!",
+    });
+
   } catch (error) {
     console.error("Error collecting generation commission:", error);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
+
 
 app.post("/api/daily-income/collect", async (req, res) => {
   try {
