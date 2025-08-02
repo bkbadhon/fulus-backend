@@ -109,11 +109,38 @@ app.post("/api/users", async (req, res) => {
       return res.status(400).json({ success: false, message: "Missing required fields" });
     }
 
+    // ✅ Check if user already exists
     const existing = await usersCollection.findOne({ userId: Number(userId) });
     if (existing) {
       return res.status(409).json({ success: false, message: "User already exists" });
     }
 
+    // ✅ If sponsor exists, check balance
+    let sponsor = null;
+    const requiredCharge = 599; // cost to open account
+
+    if (sponsorId) {
+      sponsor = await usersCollection.findOne({ userId: Number(sponsorId) });
+
+      if (!sponsor) {
+        return res.status(404).json({ success: false, message: "Sponsor not found" });
+      }
+
+      if ((sponsor.balance || 0) < requiredCharge) {
+        return res.status(400).json({
+          success: false,
+          message: `Insufficient balance. Need at least ${requiredCharge} SAR to create account.`
+        });
+      }
+
+      // ✅ Deduct balance from sponsor
+      await usersCollection.updateOne(
+        { userId: Number(sponsorId) },
+        { $inc: { balance: -requiredCharge } }
+      );
+    }
+
+    // ✅ Create new user
     const newUser = {
       name,
       phone,
@@ -124,41 +151,45 @@ app.post("/api/users", async (req, res) => {
       createdAt: createdAt || new Date().toISOString(),
       role: role || "user",
       balance: balance || 0,
-      chargeAmount: chargeAmount || 0,
+      chargeAmount: chargeAmount || requiredCharge,
       sponsorId: sponsorId ? Number(sponsorId) : null,
     };
 
     const result = await usersCollection.insertOne(newUser);
 
-    // ✅ Generation Mapping Logic
+    // ✅ Generation Mapping
     if (sponsorId) {
       const sponsorGen = await generationsCollection.findOne({ userId: Number(sponsorId) });
 
-const generationData = {
-  userId: Number(userId),
-  sponsorId: Number(sponsorId),
-  g2: sponsorGen?.sponsorId || null,
-  g3: sponsorGen?.g2 || null,
-  g4: sponsorGen?.g3 || null,
-  g5: sponsorGen?.g4 || null,
-  g6: sponsorGen?.g5 || null,
-  g7: sponsorGen?.g6 || null,
-  g8: sponsorGen?.g7 || null,
-  g9: sponsorGen?.g8 || null,
-  g10: sponsorGen?.g9 || null,
-};
-
+      const generationData = {
+        userId: Number(userId),
+        sponsorId: Number(sponsorId),
+        g2: sponsorGen?.sponsorId || null,
+        g3: sponsorGen?.g2 || null,
+        g4: sponsorGen?.g3 || null,
+        g5: sponsorGen?.g4 || null,
+        g6: sponsorGen?.g5 || null,
+        g7: sponsorGen?.g6 || null,
+        g8: sponsorGen?.g7 || null,
+        g9: sponsorGen?.g8 || null,
+        g10: sponsorGen?.g9 || null,
+      };
 
       await generationsCollection.insertOne(generationData);
     }
 
     const createdUser = await usersCollection.findOne({ _id: result.insertedId });
-    res.status(201).json({ success: true, user: createdUser });
+    res.status(201).json({
+      success: true,
+      message: "User created and 599 SAR deducted from sponsor balance.",
+      user: createdUser
+    });
   } catch (error) {
     console.error("Create user error:", error.message);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
+
 
 app.get("/api/generations/:userId", async (req, res) => {
   try {
