@@ -578,86 +578,137 @@ async function getReferralsTreeWithGenAndCount(userId, maxDepth = 10, currentDep
   return { referrals: results, count: totalCount };
 }
 
-app.get('/api/bonus/by-generation/:userId', async (req, res) => {
+// Count all nested referrals for a single user
+function countAllNestedReferrals(user) {
+  if (!user.referrals || user.referrals.length === 0) return 0;
+  let count = user.referrals.length;
+  for (const ref of user.referrals) {
+    count += countAllNestedReferrals(ref);
+  }
+  return count;
+}
+
+app.get("/api/users/:userId/gen1-ref-totals", async (req, res) => {
   try {
     const userId = Number(req.params.userId);
-    if (isNaN(userId)) return res.status(400).json({ success: false, message: "Invalid userId" });
-
     const { referrals } = await getReferralsTreeWithGenAndCount(userId);
 
-    // Flatten referrals
-    const flattenReferrals = (refList) => {
-      let flat = [];
-      for (const ref of refList) {
-        flat.push({ userId: ref.userId, generation: ref.generation });
-        if (ref.referrals?.length) {
-          flat = flat.concat(flattenReferrals(ref.referrals));
-        }
-      }
-      return flat;
-    };
+    // Filter only Gen1
+    const gen1 = referrals.filter(r => r.generation === "gen1");
 
-    const flatReferrals = flattenReferrals(referrals);
-    const totalReferrals = flatReferrals.length;
+    const gen1Data = gen1.map(g1 => ({
+      userId: g1.userId,
+      name: g1.name,
+      phone: g1.phone,
+      totalReferrals: countAllNestedReferrals(g1)
+    }));
 
-    const bonusConfig = {
-      dailyBonus: {
-        own: 30, gen1: 30, gen2: 25, gen3: 20, gen4: 15, gen5: 10, gen6: 5, gen7: 3, gen8: 2, gen9: 1, gen10: 0
-      },
-      generationBonus: {
-        own: 0, gen1: 20, gen2: 15, gen3: 10, gen4: 5, gen5: 3, gen6: 2, gen7: 1, gen8: 1, gen9: 1, gen10: 0
-      },
-      savingsBonus: {
-        own: 20, gen1: 20, gen2: 15, gen3: 10, gen4: 5, gen5: 3, gen6: 2, gen7: 1, gen8: 1, gen9: 1, gen10: 0
-      }
-    };
+    res.json({ success: true, userId, gen1Data });
+  } catch (err) {
+    console.error("Error:", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
 
-    const bonusesByGeneration = {
-      own: [{
-        id: 0,
-        userId,
-        dailyBonus: bonusConfig.dailyBonus.own,
-        genBonus: bonusConfig.generationBonus.own,
-        savingsBonus: bonusConfig.savingsBonus.own,
-        bonusCollect: await bonusesCollection.findOne({ userId, generation: "own", bonusCollect: true }) ? true : false
-      }]
-    };
 
-    const genMap = {};
 
-    for (const ref of flatReferrals) {
-      const genKey = ref.generation;
-      if (!bonusesByGeneration[genKey]) bonusesByGeneration[genKey] = [];
-      if (!genMap[genKey]) genMap[genKey] = 0;
-
-      const isCollected = await bonusesCollection.findOne({
-        userId: userId,
-        fromUserId: ref.userId,
-        generation: genKey,
-        bonusCollect: true
-      });
-
-      bonusesByGeneration[genKey].push({
-        id: genMap[genKey]++,
-        userId: ref.userId,
-        dailyBonus: bonusConfig.dailyBonus[genKey] || 0,
-        genBonus: bonusConfig.generationBonus[genKey] || 0,
-        savingsBonus: bonusConfig.savingsBonus[genKey] || 0,
-        bonusCollect: !!isCollected
-      });
+app.get("/api/users/:userId/gen1-ref-count", async (req, res) => {
+  try {
+    const userId = Number(req.params.userId);
+    if (isNaN(userId)) {
+      return res.status(400).json({ success: false, message: "Invalid userId" });
     }
 
-    // 👇 Include memberCount here
+    // Step 1: Get all Gen1 (direct referrals)
+    const gen1Users = await usersCollection
+      .find({ sponsorId: userId })
+      .project({ password: 0 })
+      .toArray();
+
+    if (!gen1Users.length) {
+      return res.json({ success: true, userId, gen1Details: [] });
+    }
+
+    // Step 2: For each Gen1, count their direct referrals
+    const gen1Details = await Promise.all(
+      gen1Users.map(async (gen1) => {
+        const gen1RefCount = await usersCollection.countDocuments({ sponsorId: gen1.userId });
+        return {
+          userId: gen1.userId,
+          name: gen1.name,
+          phone: gen1.phone,
+          gen1RefCount // এই Gen1 কতোজনকে রেফার করেছে
+        };
+      })
+    );
+
     res.json({
       success: true,
       userId,
-      memberCount: totalReferrals,
-      bonusesByGeneration
+      totalGen1: gen1Users.length,
+      gen1Details
     });
 
   } catch (error) {
-    console.error("Error fetching bonuses by generation:", error);
+    console.error("Error fetching gen1 referral count:", error);
     res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+
+app.post('/api/users/collect-reward', async (req, res) => {
+  try {
+    let { userId, rank, type, amount } = req.body;
+
+    if (!userId || !rank || !type || amount === undefined) {
+      return res.status(400).json({ success: false, message: "Missing required fields." });
+    }
+
+    // Convert to number if needed
+    const userIdNum = typeof userId === 'string' ? Number(userId) : userId;
+
+    // Convert gold string like "2.10g" to number 2.10 if type is gold
+    if (type === 'gold' && typeof amount === 'string') {
+      amount = parseFloat(amount.replace(/[^\d.]/g, ''));
+      if (isNaN(amount)) {
+        return res.status(400).json({ success: false, message: "Invalid gold amount." });
+      }
+    }
+
+    const user = await usersCollection.findOne({ userId: userIdNum });
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found." });
+    }
+
+    // Check if reward already collected
+    const collectedKey = `${rank}-${type}`;
+    if (user.rankBonus && user.rankBonus[collectedKey]) {
+      return res.status(400).json({ success: false, message: "Reward already collected." });
+    }
+
+    // Prepare update query
+    const updateFields = {
+      [`rankBonus.${collectedKey}`]: amount
+    };
+    const updateIncFields = {};
+    if (type === 'sar') {
+      updateIncFields.balance = amount;
+    } else if (type === 'gold') {
+      updateIncFields.goldBalance = amount;
+    }
+
+    await usersCollection.updateOne(
+      { userId: userIdNum },
+      {
+        $inc: updateIncFields,
+        $set: updateFields,
+      }
+    );
+
+    return res.json({ success: true, message: "Reward collected successfully." });
+  } catch (error) {
+    console.error('Collect reward error:', error);
+    return res.status(500).json({ success: false, message: "Server error." });
   }
 });
 
@@ -793,13 +844,13 @@ app.post('/api/bonus/collect', async (req, res) => {
 
     const bonusConfig = {
       dailyBonus: {
-        own: 30, gen1: 30, gen2: 25, gen3: 20, gen4: 15, gen5: 10, gen6: 5, gen7: 3, gen8: 2, gen9: 1, gen10: 0
+        own: 0, gen1: 30, gen2: 25, gen3: 20, gen4: 15, gen5: 10, gen6: 5, gen7: 3, gen8: 2, gen9: 1, gen10: 0
       },
       generationBonus: {
         own: 0, gen1: 20, gen2: 15, gen3: 10, gen4: 5, gen5: 3, gen6: 2, gen7: 1, gen8: 1, gen9: 1, gen10: 0
       },
       savingsBonus: {
-        own: 20, gen1: 20, gen2: 15, gen3: 10, gen4: 5, gen5: 3, gen6: 2, gen7: 1, gen8: 1, gen9: 1, gen10: 0
+        own: 0, gen1: 20, gen2: 15, gen3: 10, gen4: 5, gen5: 3, gen6: 2, gen7: 1, gen8: 1, gen9: 1, gen10: 0
       }
     };
 
@@ -1243,9 +1294,6 @@ app.get("/api/daily-savings/:userId", async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
-
-
-
 
 
 
