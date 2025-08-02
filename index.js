@@ -1333,6 +1333,70 @@ app.post("/api/daily-income/collect", async (req, res) => {
   }
 });
 
+// Withdraw Savings API
+app.post("/api/savings/withdraw", async (req, res) => {
+  try {
+    const { userId, withdrawAmount } = req.body;
+
+    if (!userId || !withdrawAmount) {
+      return res.json({ success: false, message: "Missing data" });
+    }
+
+    const today = new Date();
+    if (today.getDate() !== 1) {
+      return res.json({ success: false, message: "You can only withdraw on the 1st day of the month" });
+    }
+
+    // Fetch all savings for this user
+    const savingsData = await dailyCollection.find({
+      userId: { $in: [String(userId), Number(userId)] }
+    }).toArray();
+
+    if (!savingsData || savingsData.length === 0) {
+      return res.json({ success: false, message: "No savings available" });
+    }
+
+    // Calculate total, withdraw 75%, leave 25%
+    const totalSavings = savingsData.reduce((sum, entry) => sum + (entry.amount || 0), 0);
+    const withdrawAmt = totalSavings * 0.75;
+    const remainAmt = totalSavings * 0.25;
+
+    // Update user balance
+    await usersCollection.updateOne(
+      { userId: { $in: [String(userId), Number(userId)] } },
+      { $inc: { balance: withdrawAmt } }
+    );
+
+    // Reset savings collection
+    await dailyCollection.deleteMany({ userId: { $in: [String(userId), Number(userId)] } });
+
+    // Insert remaining 25% as last month's date to prevent recollection today
+    if (remainAmt > 0) {
+      const lastMonth = new Date(today.setMonth(today.getMonth() - 1))
+        .toISOString()
+        .split("T")[0];
+
+      await dailyCollection.insertOne({
+        userId: Number(userId),
+        amount: remainAmt,
+        date: lastMonth, // not today
+      });
+    }
+
+    return res.json({
+      success: true,
+      withdrawn: withdrawAmt,
+      remaining: remainAmt
+    });
+
+  } catch (err) {
+    console.error("Error in withdraw:", err);
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+
+
 
 
 // --- Start Server ---
