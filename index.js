@@ -109,38 +109,11 @@ app.post("/api/users", async (req, res) => {
       return res.status(400).json({ success: false, message: "Missing required fields" });
     }
 
-    // ✅ Check if user already exists
     const existing = await usersCollection.findOne({ userId: Number(userId) });
     if (existing) {
       return res.status(409).json({ success: false, message: "User already exists" });
     }
 
-    // ✅ If sponsor exists, check balance
-    let sponsor = null;
-    const requiredCharge = 599; // cost to open account
-
-    if (sponsorId) {
-      sponsor = await usersCollection.findOne({ userId: Number(sponsorId) });
-
-      if (!sponsor) {
-        return res.status(404).json({ success: false, message: "Sponsor not found" });
-      }
-
-      if ((sponsor.balance || 0) < requiredCharge) {
-        return res.status(400).json({
-          success: false,
-          message: `Insufficient balance. Need at least ${requiredCharge} SAR to create account.`
-        });
-      }
-
-      // ✅ Deduct balance from sponsor
-      await usersCollection.updateOne(
-        { userId: Number(sponsorId) },
-        { $inc: { balance: -requiredCharge } }
-      );
-    }
-
-    // ✅ Create new user
     const newUser = {
       name,
       phone,
@@ -151,45 +124,41 @@ app.post("/api/users", async (req, res) => {
       createdAt: createdAt || new Date().toISOString(),
       role: role || "user",
       balance: balance || 0,
-      chargeAmount: chargeAmount || requiredCharge,
+      chargeAmount: chargeAmount || 0,
       sponsorId: sponsorId ? Number(sponsorId) : null,
     };
 
     const result = await usersCollection.insertOne(newUser);
 
-    // ✅ Generation Mapping
+    // ✅ Generation Mapping Logic
     if (sponsorId) {
       const sponsorGen = await generationsCollection.findOne({ userId: Number(sponsorId) });
 
-      const generationData = {
-        userId: Number(userId),
-        sponsorId: Number(sponsorId),
-        g2: sponsorGen?.sponsorId || null,
-        g3: sponsorGen?.g2 || null,
-        g4: sponsorGen?.g3 || null,
-        g5: sponsorGen?.g4 || null,
-        g6: sponsorGen?.g5 || null,
-        g7: sponsorGen?.g6 || null,
-        g8: sponsorGen?.g7 || null,
-        g9: sponsorGen?.g8 || null,
-        g10: sponsorGen?.g9 || null,
-      };
+const generationData = {
+  userId: Number(userId),
+  sponsorId: Number(sponsorId),
+  g2: sponsorGen?.sponsorId || null,
+  g3: sponsorGen?.g2 || null,
+  g4: sponsorGen?.g3 || null,
+  g5: sponsorGen?.g4 || null,
+  g6: sponsorGen?.g5 || null,
+  g7: sponsorGen?.g6 || null,
+  g8: sponsorGen?.g7 || null,
+  g9: sponsorGen?.g8 || null,
+  g10: sponsorGen?.g9 || null,
+};
+
 
       await generationsCollection.insertOne(generationData);
     }
 
     const createdUser = await usersCollection.findOne({ _id: result.insertedId });
-    res.status(201).json({
-      success: true,
-      message: "User created and 599 SAR deducted from sponsor balance.",
-      user: createdUser
-    });
+    res.status(201).json({ success: true, user: createdUser });
   } catch (error) {
     console.error("Create user error:", error.message);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
-
 
 app.get("/api/generations/:userId", async (req, res) => {
   try {
@@ -689,51 +658,53 @@ app.get("/api/users/:userId/gen1-ref-count", async (req, res) => {
 
 app.post('/api/users/collect-reward', async (req, res) => {
   try {
-    let { userId, rank, type, amount } = req.body;
+    const { userId, rank, type, amount } = req.body;
 
     if (!userId || !rank || !type || amount === undefined) {
       return res.status(400).json({ success: false, message: "Missing required fields." });
     }
 
-    // Convert to number if needed
-    const userIdNum = typeof userId === 'string' ? Number(userId) : userId;
-
     // Convert gold string like "2.10g" to number 2.10 if type is gold
+    let numericAmount = amount;
     if (type === 'gold' && typeof amount === 'string') {
-      amount = parseFloat(amount.replace(/[^\d.]/g, ''));
-      if (isNaN(amount)) {
+      numericAmount = parseFloat(amount.replace(/[^\d.]/g, ''));
+      if (isNaN(numericAmount)) {
         return res.status(400).json({ success: false, message: "Invalid gold amount." });
       }
     }
 
-    const user = await usersCollection.findOne({ userId: userIdNum });
+    // Find user document
+    const user = await usersCollection.findOne({ userId });
+
     if (!user) {
       return res.status(404).json({ success: false, message: "User not found." });
     }
 
-    // Check if reward already collected
+    // Prepare update fields
+    const updateFields = {};
+
+    // Initialize rankBonus object if missing
+    if (!user.rankBonus) user.rankBonus = {};
+
+    // Check if reward already collected (sar or gold) for this rank
     const collectedKey = `${rank}-${type}`;
-    if (user.rankBonus && user.rankBonus[collectedKey]) {
+    if (user.rankBonus[collectedKey]) {
       return res.status(400).json({ success: false, message: "Reward already collected." });
     }
 
-    // Prepare update query
-    const updateFields = {
-      [`rankBonus.${collectedKey}`]: amount
-    };
-    const updateIncFields = {};
+    // Update SAR or Gold balance and record collection in rankBonus
     if (type === 'sar') {
-      updateIncFields.balance = amount;
+      updateFields.balance = (user.balance || 0) + numericAmount;
+      updateFields[`rankBonus.${collectedKey}`] = numericAmount; // save amount collected
     } else if (type === 'gold') {
-      updateIncFields.goldBalance = amount;
+      updateFields.goldBalance = (user.goldBalance || 0) + numericAmount;
+      updateFields[`rankBonus.${collectedKey}`] = numericAmount;
     }
 
+    // Update user document atomically
     await usersCollection.updateOne(
-      { userId: userIdNum },
-      {
-        $inc: updateIncFields,
-        $set: updateFields,
-      }
+      { userId },
+      { $set: updateFields }
     );
 
     return res.json({ success: true, message: "Reward collected successfully." });
@@ -742,7 +713,6 @@ app.post('/api/users/collect-reward', async (req, res) => {
     return res.status(500).json({ success: false, message: "Server error." });
   }
 });
-
 
 
 app.get('/api/admin/referral-report', async (req, res) => {
