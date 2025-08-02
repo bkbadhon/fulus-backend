@@ -109,11 +109,38 @@ app.post("/api/users", async (req, res) => {
       return res.status(400).json({ success: false, message: "Missing required fields" });
     }
 
+    // ✅ Check if user already exists
     const existing = await usersCollection.findOne({ userId: Number(userId) });
     if (existing) {
       return res.status(409).json({ success: false, message: "User already exists" });
     }
 
+    // ✅ If sponsor exists, check balance
+    let sponsor = null;
+    const requiredCharge = 599; // cost to open account
+
+    if (sponsorId) {
+      sponsor = await usersCollection.findOne({ userId: Number(sponsorId) });
+
+      if (!sponsor) {
+        return res.status(404).json({ success: false, message: "Sponsor not found" });
+      }
+
+      if ((sponsor.balance || 0) < requiredCharge) {
+        return res.status(400).json({
+          success: false,
+          message: `Insufficient balance. Need at least ${requiredCharge} SAR to create account.`
+        });
+      }
+
+      // ✅ Deduct balance from sponsor
+      await usersCollection.updateOne(
+        { userId: Number(sponsorId) },
+        { $inc: { balance: -requiredCharge } }
+      );
+    }
+
+    // ✅ Create new user
     const newUser = {
       name,
       phone,
@@ -124,41 +151,45 @@ app.post("/api/users", async (req, res) => {
       createdAt: createdAt || new Date().toISOString(),
       role: role || "user",
       balance: balance || 0,
-      chargeAmount: chargeAmount || 0,
+      chargeAmount: chargeAmount || requiredCharge,
       sponsorId: sponsorId ? Number(sponsorId) : null,
     };
 
     const result = await usersCollection.insertOne(newUser);
 
-    // ✅ Generation Mapping Logic
+    // ✅ Generation Mapping
     if (sponsorId) {
       const sponsorGen = await generationsCollection.findOne({ userId: Number(sponsorId) });
 
-const generationData = {
-  userId: Number(userId),
-  sponsorId: Number(sponsorId),
-  g2: sponsorGen?.sponsorId || null,
-  g3: sponsorGen?.g2 || null,
-  g4: sponsorGen?.g3 || null,
-  g5: sponsorGen?.g4 || null,
-  g6: sponsorGen?.g5 || null,
-  g7: sponsorGen?.g6 || null,
-  g8: sponsorGen?.g7 || null,
-  g9: sponsorGen?.g8 || null,
-  g10: sponsorGen?.g9 || null,
-};
-
+      const generationData = {
+        userId: Number(userId),
+        sponsorId: Number(sponsorId),
+        g2: sponsorGen?.sponsorId || null,
+        g3: sponsorGen?.g2 || null,
+        g4: sponsorGen?.g3 || null,
+        g5: sponsorGen?.g4 || null,
+        g6: sponsorGen?.g5 || null,
+        g7: sponsorGen?.g6 || null,
+        g8: sponsorGen?.g7 || null,
+        g9: sponsorGen?.g8 || null,
+        g10: sponsorGen?.g9 || null,
+      };
 
       await generationsCollection.insertOne(generationData);
     }
 
     const createdUser = await usersCollection.findOne({ _id: result.insertedId });
-    res.status(201).json({ success: true, user: createdUser });
+    res.status(201).json({
+      success: true,
+      message: "User created and 599 SAR deducted from sponsor balance.",
+      user: createdUser
+    });
   } catch (error) {
     console.error("Create user error:", error.message);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
+
 
 app.get("/api/generations/:userId", async (req, res) => {
   try {
@@ -495,6 +526,7 @@ app.post('/api/bonus/savings/:userId', async (req, res) => {
 
 
 
+
 // Recursive function to get referrals tree for a userId
 async function getReferralsTreeWithGenAndCount(userId, maxDepth = 10, currentDepth = 1) {
   if (currentDepth > maxDepth) return { referrals: [], count: 0 };
@@ -526,6 +558,73 @@ async function getReferralsTreeWithGenAndCount(userId, maxDepth = 10, currentDep
   return { referrals: results, count: totalCount };
 }
 
+app.get("/api/bonus/by-generation/:userId", async (req, res) => {
+  try {
+    const userId = Number(req.params.userId);
+    if (isNaN(userId)) {
+      return res.status(400).json({ success: false, message: "Invalid userId" });
+    }
+
+    // Bonus settings
+    const generationBonusSettings = { own: 5, gen1: 5, gen2: 5, gen3: 5, gen4: 5, gen5: 5, gen6: 5, gen7: 5, gen8: 5, gen9: 5, gen10: 5 };
+    const savingsBonusSettings = { own: 3, gen1: 3, gen2: 3, gen3: 3, gen4: 3, gen5: 3, gen6: 3, gen7: 3, gen8: 3, gen9: 3, gen10: 3 };
+    const dailyIncomeSettings = { own: 30, gen1: 20, gen2: 10, gen3: 5, gen4: 5, gen5: 5, gen6: 5, gen7: 5, gen8: 5, gen9: 5, gen10: 5 };
+
+    // Prepare response object
+    const bonusesByGeneration = {
+      own: [], gen1: [], gen2: [], gen3: [], gen4: [],
+      gen5: [], gen6: [], gen7: [], gen8: [], gen9: [], gen10: [],
+    };
+
+    // 1️⃣ Find the main user
+    const selfUser = await usersCollection.findOne({ userId });
+    if (!selfUser) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    // Add own bonus
+    bonusesByGeneration.own.push({
+      userId: selfUser.userId,
+      genBonus: generationBonusSettings.own,
+      savingsBonus: savingsBonusSettings.own,
+      dailyBonus: dailyIncomeSettings.own,
+      bonusCollect: false,
+    });
+
+    // 2️⃣ Get referrals tree
+    const tree = await getReferralsTreeWithGenAndCount(userId, 10);
+
+    // 3️⃣ Flatten tree to assign bonuses by generation
+    function traverseAndAssign(node) {
+      for (const ref of node) {
+        const genKey = ref.generation; // e.g., gen1, gen2...
+        if (bonusesByGeneration[genKey]) {
+          bonusesByGeneration[genKey].push({
+            userId: ref.userId,
+            genBonus: generationBonusSettings[genKey],
+            savingsBonus: savingsBonusSettings[genKey],
+            dailyBonus: dailyIncomeSettings[genKey],
+            bonusCollect: false,
+          });
+        }
+
+        if (ref.referrals && ref.referrals.length > 0) {
+          traverseAndAssign(ref.referrals);
+        }
+      }
+    }
+
+    traverseAndAssign(tree.referrals);
+
+    // 4️⃣ Return result
+    res.json({ success: true, bonusesByGeneration });
+  } catch (error) {
+    console.error("Bonus by generation error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+
 app.get('/api/users/:userId/referrals', async (req, res) => {
   try {
     const userId = Number(req.params.userId);
@@ -547,36 +646,6 @@ app.get('/api/users/:userId/referrals', async (req, res) => {
   }
 });
 
-// Recursive function to get referrals tree with generation labels and count
-async function getReferralsTreeWithGenAndCount(userId, maxDepth = 10, currentDepth = 1) {
-  if (currentDepth > maxDepth) return { referrals: [], count: 0 };
-
-  const referrals = await usersCollection
-    .find({ sponsorId: userId })
-    .project({ password: 0 })
-    .toArray();
-
-  const generationLabel = `gen${currentDepth}`;
-
-  let totalCount = referrals.length;
-
-  const results = await Promise.all(referrals.map(async (ref) => {
-    const nested = await getReferralsTreeWithGenAndCount(ref.userId, maxDepth, currentDepth + 1);
-    totalCount += nested.count; // add child's count
-
-    return {
-      _id: ref._id,
-      userId: ref.userId,
-      name: ref.name,
-      phone: ref.phone,
-      avatarUrl: ref.avatarUrl,
-      generation: generationLabel,
-      referrals: nested.referrals,
-    };
-  }));
-
-  return { referrals: results, count: totalCount };
-}
 
 // Count all nested referrals for a single user
 function countAllNestedReferrals(user) {
@@ -658,53 +727,51 @@ app.get("/api/users/:userId/gen1-ref-count", async (req, res) => {
 
 app.post('/api/users/collect-reward', async (req, res) => {
   try {
-    const { userId, rank, type, amount } = req.body;
+    let { userId, rank, type, amount } = req.body;
 
     if (!userId || !rank || !type || amount === undefined) {
       return res.status(400).json({ success: false, message: "Missing required fields." });
     }
 
+    // Convert to number if needed
+    const userIdNum = typeof userId === 'string' ? Number(userId) : userId;
+
     // Convert gold string like "2.10g" to number 2.10 if type is gold
-    let numericAmount = amount;
     if (type === 'gold' && typeof amount === 'string') {
-      numericAmount = parseFloat(amount.replace(/[^\d.]/g, ''));
-      if (isNaN(numericAmount)) {
+      amount = parseFloat(amount.replace(/[^\d.]/g, ''));
+      if (isNaN(amount)) {
         return res.status(400).json({ success: false, message: "Invalid gold amount." });
       }
     }
 
-    // Find user document
-    const user = await usersCollection.findOne({ userId });
-
+    const user = await usersCollection.findOne({ userId: userIdNum });
     if (!user) {
       return res.status(404).json({ success: false, message: "User not found." });
     }
 
-    // Prepare update fields
-    const updateFields = {};
-
-    // Initialize rankBonus object if missing
-    if (!user.rankBonus) user.rankBonus = {};
-
-    // Check if reward already collected (sar or gold) for this rank
+    // Check if reward already collected
     const collectedKey = `${rank}-${type}`;
-    if (user.rankBonus[collectedKey]) {
+    if (user.rankBonus && user.rankBonus[collectedKey]) {
       return res.status(400).json({ success: false, message: "Reward already collected." });
     }
 
-    // Update SAR or Gold balance and record collection in rankBonus
+    // Prepare update query
+    const updateFields = {
+      [`rankBonus.${collectedKey}`]: amount
+    };
+    const updateIncFields = {};
     if (type === 'sar') {
-      updateFields.balance = (user.balance || 0) + numericAmount;
-      updateFields[`rankBonus.${collectedKey}`] = numericAmount; // save amount collected
+      updateIncFields.balance = amount;
     } else if (type === 'gold') {
-      updateFields.goldBalance = (user.goldBalance || 0) + numericAmount;
-      updateFields[`rankBonus.${collectedKey}`] = numericAmount;
+      updateIncFields.goldBalance = amount;
     }
 
-    // Update user document atomically
     await usersCollection.updateOne(
-      { userId },
-      { $set: updateFields }
+      { userId: userIdNum },
+      {
+        $inc: updateIncFields,
+        $set: updateFields,
+      }
     );
 
     return res.json({ success: true, message: "Reward collected successfully." });
@@ -713,6 +780,7 @@ app.post('/api/users/collect-reward', async (req, res) => {
     return res.status(500).json({ success: false, message: "Server error." });
   }
 });
+
 
 
 app.get('/api/admin/referral-report', async (req, res) => {
