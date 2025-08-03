@@ -1233,6 +1233,84 @@ app.get("/api/deposit/pending", async (req, res) => {
   }
 });
 
+app.put("/api/deposit/update/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { acceptedBy } = req.body;
+
+    const result = await depositCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { 
+        $set: { 
+          status: "accepted",
+          acceptedBy,
+          acceptedAt: new Date(),
+        } 
+      }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ success: false, message: "Deposit not found" });
+    }
+
+    res.json({ success: true, message: "Deposit accepted successfully" });
+  } catch (error) {
+    console.error("Failed to accept deposit:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+app.put("/api/deposit/success/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { agentId } = req.body;
+
+    const deposit = await depositCollection.findOne({ _id: new ObjectId(id) });
+    if (!deposit) return res.status(404).json({ success: false, message: "Deposit not found" });
+    if (deposit.status !== "accepted") return res.status(400).json({ success: false, message: "Deposit not accepted yet" });
+
+    const agent = await usersCollection.findOne({ userId: agentId });
+    const depositUser = await usersCollection.findOne({ userId: deposit.userId });
+
+    if (!agent || !depositUser) return res.status(404).json({ success: false, message: "Users not found" });
+    if (agent.balance < deposit.amount) return res.status(400).json({ success: false, message: "Insufficient balance" });
+
+    // Deduct from agent & Add to deposit user
+    await usersCollection.updateOne({ userId: agentId }, { $inc: { balance: -deposit.amount } });
+    await usersCollection.updateOne({ userId: deposit.userId }, { $inc: { balance: deposit.amount } });
+
+    // Mark as success
+    await depositCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { status: "success", successAt: new Date() } }
+    );
+
+    res.json({ success: true, message: "Deposit completed successfully" });
+  } catch (error) {
+    console.error("Failed to process success:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+app.get("/api/deposit/accepted-by/:userId", async (req, res) => {
+  try {
+    let { userId } = req.params;
+    // convert to number if it looks numeric
+    userId = /^\d+$/.test(userId) ? Number(userId) : userId;
+
+    const deposits = await depositCollection.find({
+      status: "accepted",
+      "acceptedBy.userId": userId,
+    }).toArray();
+
+    res.json({ success: true, deposits });
+  } catch (error) {
+    console.error("Failed to fetch accepted deposits by user:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+
+
 
 app.patch("/api/deposit/:id", async (req, res) => {
   try {
