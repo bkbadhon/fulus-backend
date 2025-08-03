@@ -268,6 +268,59 @@ app.get('/api/users/:userId', async (req, res) => {
   }
 });
 
+app.put("/api/users/:userId/update-profile", async (req, res) => {
+  try {
+    const userId = Number(req.params.userId);
+    const { name, whatsapp, country, address, email } = req.body;
+
+    // Update in database (example with MongoDB)
+    const updatedUser = await usersCollection.findOneAndUpdate(
+      { userId },
+      { $set: { name, phone: whatsapp, country, address, email } },
+      { returnDocument: "after" }
+    );
+
+    if (!updatedUser) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    res.json({ success: true, user: updatedUser });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+app.put("/api/users/:userId/update-password", async (req, res) => {
+  try {
+    const userId = Number(req.params.userId);
+    const { oldPassword, newPassword } = req.body;
+
+    // Find the user first
+    const user = await usersCollection.findOne({ userId });
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    // Check old password (plain text match)
+    if (user.password !== oldPassword) {
+      return res.status(400).json({ success: false, message: "Old password is incorrect" });
+    }
+
+    // Update the password
+    const updatedUser = await usersCollection.findOneAndUpdate(
+      { userId },
+      { $set: { password: newPassword } },
+      { returnDocument: "after" }
+    );
+
+    res.json({ success: true, user: updatedUser });
+  } catch (err) {
+    console.error("Error updating password:", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
 
 app.get('/api/bonus/:userId', async (req, res) => {
   try {
