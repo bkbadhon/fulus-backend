@@ -1275,22 +1275,50 @@ app.put("/api/deposit/success/:id", async (req, res) => {
     if (!agent || !depositUser) return res.status(404).json({ success: false, message: "Users not found" });
     if (agent.balance < deposit.amount) return res.status(400).json({ success: false, message: "Insufficient balance" });
 
-    // Deduct from agent & Add to deposit user
-    await usersCollection.updateOne({ userId: agentId }, { $inc: { balance: -deposit.amount } });
-    await usersCollection.updateOne({ userId: deposit.userId }, { $inc: { balance: deposit.amount } });
+    const amount = deposit.amount;
+    const commission = parseFloat((amount * 0.02).toFixed(2)); // 2% commission
 
-    // Mark as success
-    await depositCollection.updateOne(
-      { _id: new ObjectId(id) },
-      { $set: { status: "success", successAt: new Date() } }
+    // 1️⃣ Deduct full amount from agent
+    await usersCollection.updateOne(
+      { userId: agentId },
+      { $inc: { balance: -amount } }
     );
 
-    res.json({ success: true, message: "Deposit completed successfully" });
+    // 2️⃣ Add full amount to user
+    await usersCollection.updateOne(
+      { userId: deposit.userId },
+      { $inc: { balance: amount } }
+    );
+
+    // 3️⃣ Add 2% commission back to agent
+    await usersCollection.updateOne(
+      { userId: agentId },
+      { $inc: { balance: commission } }
+    );
+
+    // 4️⃣ Mark deposit as success
+    await depositCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { 
+        $set: { 
+          status: "success", 
+          successAt: new Date(),
+          commission
+        } 
+      }
+    );
+
+    res.json({ 
+      success: true, 
+      message: `Deposit completed. Agent earned ${commission} SAR commission.` 
+    });
+
   } catch (error) {
     console.error("Failed to process success:", error);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
+
 app.get("/api/deposit/accepted-by/:userId", async (req, res) => {
   try {
     let { userId } = req.params;
