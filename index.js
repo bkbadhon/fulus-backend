@@ -841,49 +841,74 @@ app.get("/api/users/:userId/gen1-ref-totals", async (req, res) => {
 });
 
 
+// Recursive helper function to count ALL referrals under a user (all generations)
+async function countAllReferrals(userId, usersCollection) {
+  // Find direct referrals of this user
+  const directRefs = await usersCollection.find({ sponsorId: userId }).project({ userId: 1 }).toArray();
 
-app.get("/api/users/:userId/gen1-ref-count", async (req, res) => {
+  if (directRefs.length === 0) return 0;
+
+  // Count direct referrals
+  let total = directRefs.length;
+
+  // Recursively count referrals of each direct referral
+  for (const ref of directRefs) {
+    total += await countAllReferrals(ref.userId, usersCollection);
+  }
+
+  return total;
+}
+
+app.get("/api/users/:userId/team-summary", async (req, res) => {
   try {
     const userId = Number(req.params.userId);
     if (isNaN(userId)) {
       return res.status(400).json({ success: false, message: "Invalid userId" });
     }
 
-    // Step 1: Get all Gen1 (direct referrals)
-    const gen1Users = await usersCollection
-      .find({ sponsorId: userId })
-      .project({ password: 0 })
-      .toArray();
+    // Step 1: Get Gen1 users (direct referrals)
+    const gen1Users = await usersCollection.find({ sponsorId: userId }).project({ password: 0 }).toArray();
 
-    if (!gen1Users.length) {
-      return res.json({ success: true, userId, gen1Details: [] });
+    const totalGen1 = gen1Users.length;
+    let totalTeam = 0; // total team referrals excluding Gen1 count itself
+
+    const gen1Details = [];
+
+    // Step 2: For each Gen1 user, count their total referrals recursively
+    for (const gen1 of gen1Users) {
+      const totalNestedRefs = await countAllReferrals(gen1.userId, usersCollection);
+
+      // Add each Gen1 user's referral count (nested)
+      totalTeam += totalNestedRefs;
+
+      gen1Details.push({
+        userId: gen1.userId,
+        name: gen1.name,
+        phone: gen1.phone,
+        totalReferrals: totalNestedRefs, // nested referrals count for this Gen1 user
+      });
     }
 
-    // Step 2: For each Gen1, count their direct referrals
-    const gen1Details = await Promise.all(
-      gen1Users.map(async (gen1) => {
-        const gen1RefCount = await usersCollection.countDocuments({ sponsorId: gen1.userId });
-        return {
-          userId: gen1.userId,
-          name: gen1.name,
-          phone: gen1.phone,
-          gen1RefCount // এই Gen1 কতোজনকে রেফার করেছে
-        };
-      })
-    );
-
+    // Respond with the required data
     res.json({
       success: true,
       userId,
-      totalGen1: gen1Users.length,
-      gen1Details
+      totalGen1,
+      totalTeam, // sum of nested referrals of Gen1 users (excluding Gen1 count itself)
+      gen1Details,
     });
-
   } catch (error) {
-    console.error("Error fetching gen1 referral count:", error);
+    console.error("Error fetching team summary:", error);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
+
+
+
+
+
+
+
 
 
 app.post('/api/users/collect-reward', async (req, res) => {
@@ -1636,11 +1661,12 @@ app.post("/api/generation/collect", async (req, res) => {
       });
     }
 
+    const goldIncrement = (user?.goldBalance || 0) * 0.75;
     // Update user's gold balance and last collection date
     await usersCollection.updateOne(
       { userId: userIdNum },
       {
-        $inc: { goldBalance: 1.5 },        // Add 1.5 grams of gold
+        $inc: { goldBalance: goldIncrement },        // Add 1.5 grams of gold
         $set: { lastGoldCollect: todayStr } // Save the date to prevent duplicate
       }
     );
@@ -1682,12 +1708,12 @@ app.post("/api/daily-income/collect", async (req, res) => {
     await usersCollection.updateOne(
       { userId: userIdNum },
       {
-        $inc: { goldBalance: 1.5 },          // Add 1.5g gold
+        $inc: { goldBalance: 0.0213 },          // Add 1.5g gold
         $set: { lastDailyGoldCollect: todayStr } // Track daily collection
       }
     );
 
-    res.json({ success: true, message: "1.5g gold added to your account!" });
+    res.json({ success: true, message: "0.0213 g gold added to your account!" });
   } catch (error) {
     console.error("Error collecting daily gold income:", error);
     res.status(500).json({ success: false, message: "Server error" });
