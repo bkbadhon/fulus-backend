@@ -1388,7 +1388,7 @@ app.put("/api/deposit/success/:id", async (req, res) => {
     // 1️⃣ Deduct full amount from agent
     await usersCollection.updateOne(
       { userId: agentId },
-      { $inc: { balance: -amount } }
+      { $inc: { agentBalance: -amount } }
     );
 
     // 2️⃣ Add full amount to user
@@ -1400,7 +1400,7 @@ app.put("/api/deposit/success/:id", async (req, res) => {
     // 3️⃣ Add 2% commission back to agent
     await usersCollection.updateOne(
       { userId: agentId },
-      { $inc: { balance: commission } }
+      { $inc: { agentBalance: commission } }
     );
 
     // 4️⃣ Mark deposit as success
