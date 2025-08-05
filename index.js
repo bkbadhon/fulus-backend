@@ -148,6 +148,7 @@ app.post("/api/users", async (req, res) => {
       createdAt: createdAt || new Date().toISOString(),
       role: role || "user",
       balance: balance || 0,
+      agentBalance:0,
       chargeAmount: chargeAmount || requiredCharge,
       sponsorId: sponsorId ? Number(sponsorId) : null,
     };
