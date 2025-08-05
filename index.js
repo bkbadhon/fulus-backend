@@ -755,7 +755,7 @@ app.post('/api/bonus/collect', async (req, res) => {
       { userId },
       {
         $inc: {
-          goldBalance: dailyBonus + genBonus ,
+          goldBalance: dailyBonus + genBonus,
           generationBonus: genBonus,
           dailyIncome: dailyBonus,
           totalGenerationBonusCollected: genBonus
@@ -866,49 +866,122 @@ app.get("/api/users/:userId/team-summary", async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid userId" });
     }
 
-    // Step 1: Get Gen1 users (direct referrals)
-    const gen1Users = await usersCollection.find({ sponsorId: userId }).project({ password: 0 }).toArray();
+    // Fetch all users once (avoid multiple DB hits)
+    const allUsers = await usersCollection.find().project({ password: 0 }).toArray();
 
+    // --- Step 1: Build a lookup map for faster referral tree search
+    const referralMap = new Map();
+    allUsers.forEach(u => {
+      if (!referralMap.has(u.sponsorId)) referralMap.set(u.sponsorId, []);
+      referralMap.get(u.sponsorId).push(u);
+    });
+
+    // --- Step 2: Get Gen1 users (direct referrals)
+    const gen1Users = referralMap.get(userId) || [];
     const totalGen1 = gen1Users.length;
-    let totalTeam = 0; // total team referrals excluding Gen1 count itself
 
-    const gen1Details = [];
-
-    // Step 2: For each Gen1 user, count their total referrals recursively
-    for (const gen1 of gen1Users) {
-      const totalNestedRefs = await countAllReferrals(gen1.userId, usersCollection);
-
-      // Add each Gen1 user's referral count (nested)
-      totalTeam += totalNestedRefs;
-
-      gen1Details.push({
-        userId: gen1.userId,
-        name: gen1.name,
-        phone: gen1.phone,
-        totalReferrals: totalNestedRefs, // nested referrals count for this Gen1 user
-      });
+    // --- Step 3: BFS to calculate team
+    function countNestedReferrals(rootUserId) {
+      const queue = [...(referralMap.get(rootUserId) || [])];
+      const visited = new Set();
+      while (queue.length) {
+        const current = queue.shift();
+        if (!visited.has(current.userId)) {
+          visited.add(current.userId);
+          queue.push(...(referralMap.get(current.userId) || []));
+        }
+      }
+      return visited.size;
     }
 
-    // Respond with the required data
+    // Compute Gen1 details + total team
+    let totalTeam = 0;
+    const gen1Details = gen1Users.map(g1 => {
+      const nestedCount = countNestedReferrals(g1.userId);
+      totalTeam += nestedCount;
+      return {
+        userId: g1.userId,
+        name: g1.name,
+        phone: g1.phone,
+        totalReferrals: nestedCount
+      };
+    });
+
+    // --- Step 4: Compute rank of current user
+    const referralCounts = allUsers.map(u => {
+      return {
+        userId: u.userId,
+        totalReferrals: countNestedReferrals(u.userId)
+      };
+    }).sort((a, b) => b.totalReferrals - a.totalReferrals);
+
+    const rankIndex = referralCounts.findIndex(u => u.userId === userId);
+    const userRank = rankIndex >= 0 ? rankIndex + 1 : null;
+    const userReferralCount = referralCounts[rankIndex]?.totalReferrals || 0;
+
+    // --- Final combined response
     res.json({
       success: true,
       userId,
       totalGen1,
-      totalTeam, // sum of nested referrals of Gen1 users (excluding Gen1 count itself)
-      gen1Details,
+      totalTeam,
+      rank: userRank,
+      totalReferrals: userReferralCount,
+      gen1Details
     });
+
   } catch (error) {
     console.error("Error fetching team summary:", error);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
 
+app.get('/api/users/:userId/rank', async (req, res) => {
+  try {
+    const userId = Number(req.params.userId);
+    if (isNaN(userId)) {
+      return res.status(400).json({ success: false, message: "Invalid userId" });
+    }
 
+    const users = await usersCollection.find().toArray();
 
+    // Calculate referral counts for all users (could be optimized)
+    const referralData = [];
 
+    for (const user of users) {
+      if (!user.userId || typeof user.userId !== 'number') continue;
 
+      const { count } = await getReferralsTreeWithGenAndCount(user.userId);
+      referralData.push({
+        userId: user.userId,
+        totalReferrals: count,
+      });
+    }
 
+    // Sort descending by referral count
+    referralData.sort((a, b) => b.totalReferrals - a.totalReferrals);
 
+    // Find rank of requested userId
+    const rankIndex = referralData.findIndex(u => u.userId === userId);
+
+    if (rankIndex === -1) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    const userRank = rankIndex + 1;
+    const userReferralCount = referralData[rankIndex].totalReferrals;
+
+    res.json({
+      success: true,
+      userId,
+      rank: userRank,
+      totalReferrals: userReferralCount,
+    });
+  } catch (error) {
+    console.error("Error fetching user rank:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
 
 
 app.post('/api/users/collect-reward', async (req, res) => {
@@ -1019,52 +1092,7 @@ app.get('/api/admin/users-with-rank', async (req, res) => {
 });
 
 
-app.get('/api/users/:userId/rank', async (req, res) => {
-  try {
-    const userId = Number(req.params.userId);
-    if (isNaN(userId)) {
-      return res.status(400).json({ success: false, message: "Invalid userId" });
-    }
 
-    const users = await usersCollection.find().toArray();
-
-    // Calculate referral counts for all users (could be optimized)
-    const referralData = [];
-
-    for (const user of users) {
-      if (!user.userId || typeof user.userId !== 'number') continue;
-
-      const { count } = await getReferralsTreeWithGenAndCount(user.userId);
-      referralData.push({
-        userId: user.userId,
-        totalReferrals: count,
-      });
-    }
-
-    // Sort descending by referral count
-    referralData.sort((a, b) => b.totalReferrals - a.totalReferrals);
-
-    // Find rank of requested userId
-    const rankIndex = referralData.findIndex(u => u.userId === userId);
-
-    if (rankIndex === -1) {
-      return res.status(404).json({ success: false, message: "User not found" });
-    }
-
-    const userRank = rankIndex + 1;
-    const userReferralCount = referralData[rankIndex].totalReferrals;
-
-    res.json({
-      success: true,
-      userId,
-      rank: userRank,
-      totalReferrals: userReferralCount,
-    });
-  } catch (error) {
-    console.error("Error fetching user rank:", error);
-    res.status(500).json({ success: false, message: "Server error" });
-  }
-});
 
 
 app.post('/api/withdraw', async (req, res) => {
@@ -1318,12 +1346,12 @@ app.put("/api/deposit/update/:id", async (req, res) => {
 
     const result = await depositCollection.updateOne(
       { _id: new ObjectId(id) },
-      { 
-        $set: { 
+      {
+        $set: {
           status: "accepted",
           acceptedBy,
           acceptedAt: new Date(),
-        } 
+        }
       }
     );
 
@@ -1377,18 +1405,18 @@ app.put("/api/deposit/success/:id", async (req, res) => {
     // 4️⃣ Mark deposit as success
     await depositCollection.updateOne(
       { _id: new ObjectId(id) },
-      { 
-        $set: { 
-          status: "success", 
+      {
+        $set: {
+          status: "success",
           successAt: new Date(),
           commission
-        } 
+        }
       }
     );
 
-    res.json({ 
-      success: true, 
-      message: `Deposit completed. Agent earned ${commission} SAR commission.` 
+    res.json({
+      success: true,
+      message: `Deposit completed. Agent earned ${commission} SAR commission.`
     });
 
   } catch (error) {
@@ -1779,6 +1807,101 @@ app.post("/api/savings/withdraw", async (req, res) => {
   } catch (err) {
     console.error("Error in withdraw:", err);
     return res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+
+// Reward formulas (Gen1 top 3 referrals required for each rank)
+const rewardFormulas = [
+  { id: 0, label: "V.i.p", formula: [1, 1, 1], total: 3 },
+  { id: 1, label: "1★", formula: [3, 3, 3], total: 9 },
+  { id: 2, label: "2★", formula: [10, 10, 10], total: 30 },
+  { id: 3, label: "3★", formula: [30, 30, 30], total: 90 },
+  { id: 4, label: "4★", formula: [85, 85, 85], total: 255 },
+  { id: 5, label: "5★", formula: [730, 730, 730], total: 2190 },
+  { id: 6, label: "6★", formula: [6600, 6600, 6600], total: 19800 },
+  { id: 7, label: "7★", formula: [60000, 60000, 60000], total: 180000 },
+];
+
+// Recursive function to count all nested referrals
+async function countAllReferrals(userId, usersCollection) {
+  const directRefs = await usersCollection.find({ sponsorId: userId }).toArray();
+  let total = directRefs.length;
+
+  for (const ref of directRefs) {
+    total += await countAllReferrals(ref.userId, usersCollection);
+  }
+  return total;
+}
+
+// API Endpoint
+app.get("/api/users/:userId/rank-rewards", async (req, res) => {
+  try {
+    const userId = Number(req.params.userId);
+    if (isNaN(userId)) {
+      return res.status(400).json({ success: false, message: "Invalid userId" });
+    }
+
+    // Step 1: Get Gen1 users (direct referrals)
+    const gen1Users = await usersCollection.find({ sponsorId: userId }).toArray();
+
+    // Step 2: Calculate total nested referrals for each Gen1 user
+    const gen1Data = [];
+    for (const gen1 of gen1Users) {
+      const totalNestedRefs = await countAllReferrals(gen1.userId, usersCollection);
+      gen1Data.push({
+        userId: gen1.userId,
+        name: gen1.name,
+        phone: gen1.phone,
+        totalReferrals: totalNestedRefs,
+      });
+    }
+
+    // Sort descending by totalReferrals
+    const sortedRefs = gen1Data
+      .map(u => u.totalReferrals)
+      .sort((a, b) => b - a);
+
+    // Step 3: Calculate reward progress for each rank
+    const rewardsStatus = rewardFormulas.map(rank => {
+      const formula = rank.formula;
+      const refs = [...sortedRefs];
+
+      // Fill missing gen1 with 0 if user has less than formula length gen1
+      while (refs.length < formula.length) refs.push(0);
+
+      let totalPercent = 0;
+      let complete = true;
+
+      formula.forEach((req, idx) => {
+        const actual = refs[idx] || 0;
+        const progress = Math.min(actual / req, 1); // partial progress capped at 1
+        totalPercent += progress;
+        if (actual < req) complete = false;
+      });
+
+      const percent = Math.floor((totalPercent / formula.length) * 100);
+
+      return {
+        id: rank.id,
+        label: rank.label,
+        formula: formula.join(" + "),
+        total: rank.total,
+        percent,
+        complete,
+      };
+    });
+
+    res.json({
+      success: true,
+      userId,
+      gen1Count: gen1Users.length,
+      gen1Details: gen1Data,
+      rewardsStatus,
+    });
+  } catch (error) {
+    console.error("Error fetching rank rewards:", error);
+    res.status(500).json({ success: false, message: "Server error" });
   }
 });
 
