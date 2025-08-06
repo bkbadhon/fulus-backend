@@ -35,6 +35,7 @@ let depositCollection;
 let agentCollection;
 let noticeCollection;
 let dailyCollection;
+let transactionsCollection;
 
 
 let isConnected = false;
@@ -54,6 +55,7 @@ async function connectToMongoDB() {
     agentCollection = db.collection("agents");
     noticeCollection = db.collection("notice");
     dailyCollection = db.collection("savings");
+    transactionsCollection = db.collection("sendmoney");
 
 
     isConnected = true;
@@ -1094,92 +1096,46 @@ app.get('/api/admin/users-with-rank', async (req, res) => {
 
 
 
-
-
 app.post('/api/withdraw', async (req, res) => {
   try {
-    const { userId, method, amount, deliveryAddress, accountNumber } = req.body;
-    const withdrawAmount = Number(amount);
+    const { userId, method, amount, accountNumber, pin } = req.body;
 
-    if (!userId || !withdrawAmount || withdrawAmount <= 0) {
+    const numericUserId = Number(userId);
+    const withdrawAmount = Number(amount);
+    const numericPin = Number(pin);
+
+    if (!numericUserId || !withdrawAmount || withdrawAmount <= 0 || !numericPin) {
       return res.json({ success: false, message: 'Invalid withdraw request' });
     }
 
-    const user = await usersCollection.findOne({ userId: Number(userId) });
+    const user = await usersCollection.findOne({ userId: numericUserId });
     if (!user) {
       return res.json({ success: false, message: 'User not found' });
     }
 
+    // ✅ Check transaction PIN (number match)
+    if (!user.transactionPin || user.transactionPin !== numericPin) {
+      return res.json({ success: false, message: 'Invalid transaction PIN' });
+    }
+
     const totalBalance = user.balance || 0;
-    const savings = user.savings || 0;
-    const daily = user.dailyIncome || 0;
-    const gen = user.generationBonus || 0;
 
-    if (totalBalance < withdrawAmount) {
-      return res.json({ success: false, message: 'Insufficient balance' });
+    // ✅ Calculate 5% charge
+    const chargePercent = 5;
+    const chargeAmount = (withdrawAmount * chargePercent) / 100;
+    const totalDeduction = withdrawAmount + chargeAmount; // user balance থেকে কাটা হবে
+
+    if (totalBalance < totalDeduction) {
+      return res.json({ success: false, message: 'Insufficient balance including 5% charge' });
     }
 
-    // Deduct from balance
-    const newBalance = totalBalance - withdrawAmount;
+    // Deduct total (amount + charge)
+    const newBalance = totalBalance - totalDeduction;
 
-    // Sum of savings + daily + gen
-    const totalSubAccounts = savings + daily + gen;
-
-    let newSavings = savings;
-    let newDaily = daily;
-    let newGen = gen;
-
-    if (totalSubAccounts >= withdrawAmount) {
-      // Deduct withdrawAmount from savings, daily, gen in order
-
-      let remaining = withdrawAmount;
-
-      if (newSavings >= remaining) {
-        newSavings -= remaining;
-        remaining = 0;
-      } else {
-        remaining -= newSavings;
-        newSavings = 0;
-      }
-
-      if (remaining > 0) {
-        if (newDaily >= remaining) {
-          newDaily -= remaining;
-          remaining = 0;
-        } else {
-          remaining -= newDaily;
-          newDaily = 0;
-        }
-      }
-
-      if (remaining > 0) {
-        if (newGen >= remaining) {
-          newGen -= remaining;
-          remaining = 0;
-        } else {
-          // Should not happen because totalSubAccounts >= withdrawAmount
-          newGen = 0;
-          remaining = 0;
-        }
-      }
-    } else {
-      // If not enough in sub accounts, set all to zero
-      newSavings = 0;
-      newDaily = 0;
-      newGen = 0;
-    }
-
-    // Update user document
+    // Update user balance
     const updateResult = await usersCollection.updateOne(
-      { userId: Number(userId) },
-      {
-        $set: {
-          balance: newBalance,
-          savings: newSavings,
-          dailyIncome: newDaily,
-          generationBonus: newGen,
-        },
-      }
+      { userId: numericUserId },
+      { $set: { balance: newBalance } }
     );
 
     if (updateResult.modifiedCount === 0) {
@@ -1188,21 +1144,28 @@ app.post('/api/withdraw', async (req, res) => {
 
     // Insert withdraw request
     await withdrawCollection.insertOne({
-      userId: Number(userId),
+      userId: numericUserId,
       method,
-      amount: withdrawAmount,
-      deliveryAddress,
+      requestedAmount: withdrawAmount, // user চেয়েছে
+      charge: chargeAmount,            // ৫% charge
+      finalAmount: withdrawAmount,     // user পাবে
+      totalDeducted: totalDeduction,   // balance থেকে কাটা হয়েছে
       accountNumber,
       status: 'Pending',
       createdAt: new Date(),
     });
 
-    return res.json({ success: true, message: 'Withdraw request submitted successfully' });
+    return res.json({ 
+      success: true, 
+      message: `Withdraw request submitted successfully. 5% charge = ${chargeAmount} SAR` 
+    });
   } catch (error) {
     console.error('Withdraw error:', error);
     return res.json({ success: false, message: 'Internal server error' });
   }
 });
+
+
 
 
 
@@ -1905,6 +1868,211 @@ app.get("/api/users/:userId/rank-rewards", async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
+
+
+app.post("/api/users/update-pin", async (req, res) => {
+  try {
+    const { userId, pin, password } = req.body;
+
+    // Convert userId and pin to Number
+    const numericUserId = Number(userId);
+    const numericPin = Number(pin);
+
+    if (!numericUserId || !numericPin) {
+      return res.json({ success: false, message: "Invalid user or PIN" });
+    }
+
+    const user = await usersCollection.findOne({ userId: numericUserId });
+
+    if (!user) {
+      return res.json({ success: false, message: "User not found" });
+    }
+
+    if (user.password !== password) {
+      return res.json({ success: false, message: "Invalid password" });
+    }
+
+    await usersCollection.updateOne(
+      { userId: numericUserId },
+      { $set: { transactionPin: numericPin } } // ✅ number হিসেবে save
+    );
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error(error);
+    res.json({ success: false, message: "Server error" });
+  }
+});
+
+
+app.post('/api/send-money', async (req, res) => {
+  try {
+    const { senderId, receiverId, amount, pin } = req.body;
+    const sendAmount = Number(amount);
+
+    if (!senderId || !receiverId || !sendAmount || sendAmount <= 0 || !pin) {
+      return res.json({ success: false, message: 'Invalid request' });
+    }
+
+    const sender = await usersCollection.findOne({ userId: Number(senderId) });
+    const receiver = await usersCollection.findOne({ userId: Number(receiverId) });
+
+    if (!sender || !receiver) {
+      return res.json({ success: false, message: 'Sender or receiver not found' });
+    }
+
+    // Check PIN
+    if (!sender.transactionPin || sender.transactionPin !== Number(pin)) {
+      return res.json({ success: false, message: 'Invalid Transaction PIN' });
+    }
+
+    // Calculate total deduction (1% charge)
+    const charge = sendAmount * 0.01;
+    const totalDeduction = sendAmount + charge;
+
+    if ((sender.balance || 0) < totalDeduction) {
+      return res.json({ success: false, message: 'Insufficient balance' });
+    }
+
+    // Update balances
+    await usersCollection.updateOne(
+      { userId: Number(senderId) },
+      { $inc: { balance: -totalDeduction } }
+    );
+    await usersCollection.updateOne(
+      { userId: Number(receiverId) },
+      { $inc: { balance: sendAmount } }
+    );
+
+    // Insert transaction logs
+    await transactionsCollection.insertMany([
+      {
+        userId: Number(senderId),
+        type: 'send',
+        amount: sendAmount,
+        fee: charge,
+        status: 'Completed',
+        createdAt: new Date(),
+      },
+      {
+        userId: Number(receiverId),
+        type: 'receive',
+        amount: sendAmount,
+        status: 'Completed',
+        createdAt: new Date(),
+      },
+    ]);
+
+    return res.json({ success: true, message: `Sent ${sendAmount} SAR successfully with 1% charge` });
+  } catch (error) {
+    console.error('Send money error:', error);
+    return res.json({ success: false, message: 'Internal server error' });
+  }
+});
+
+
+app.post('/api/withdraw-sar', async (req, res) => {
+  try {
+    const { userId, amount, pin } = req.body;
+    const withdrawAmount = Number(amount);
+
+    if (!userId || !withdrawAmount || withdrawAmount <= 0 || !pin) {
+      return res.status(400).json({ success: false, message: 'Invalid request data' });
+    }
+
+    const user = await usersCollection.findOne({ userId: Number(userId) });
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+    if (!user.transactionPin || user.transactionPin !== Number(pin)) {
+      return res.status(401).json({ success: false, message: 'Invalid Transaction PIN' });
+    }
+
+    const pricePerGram = 375.855;
+    const goldRequired = parseFloat((withdrawAmount / pricePerGram).toFixed(3));
+
+    if ((user.goldBalance || 0) < goldRequired) {
+      return res.status(400).json({ success: false, message: 'Not enough gold balance' });
+    }
+
+    await usersCollection.updateOne(
+      { userId: Number(userId) },
+      { $inc: { goldBalance: -goldRequired, balance: withdrawAmount } }
+    );
+
+    await transactionsCollection.insertOne({
+      userId: Number(userId),
+      type: 'withdraw_sar',
+      amount: withdrawAmount,
+      goldUsed: goldRequired,
+      status: 'Pending',
+      createdAt: new Date(),
+    });
+
+    return res.json({
+      success: true,
+      message: `Withdraw request of ${withdrawAmount} SAR submitted! Gold used: ${goldRequired}g`,
+      newGoldBalance: (user.goldBalance - goldRequired).toFixed(3)
+    });
+
+  } catch (error) {
+    console.error('SAR Withdraw Error:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+
+app.post('/api/withdraw-gold', async (req, res) => {
+  try {
+    const { userId, gram, pin, address, contact } = req.body;
+    const goldAmount = Number(gram);
+
+    if (!userId || !goldAmount || goldAmount <= 0 || !pin || !address || !contact) {
+      return res.status(400).json({ success: false, message: 'Invalid request data' });
+    }
+
+    const user = await usersCollection.findOne({ userId: Number(userId) });
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+    // Verify transaction PIN
+    if (!user.transactionPin || user.transactionPin !== Number(pin)) {
+      return res.status(401).json({ success: false, message: 'Invalid Transaction PIN' });
+    }
+
+    const availableGold = user.goldBalance || 0;
+    if (availableGold < goldAmount) {
+      return res.status(400).json({ success: false, message: 'Not enough gold balance' });
+    }
+
+    // Deduct gold
+    await usersCollection.updateOne(
+      { userId: Number(userId) },
+      { $inc: { goldBalance: -goldAmount } }
+    );
+
+    // Insert transaction log as Pending
+    await transactionsCollection.insertOne({
+      userId: Number(userId),
+      type: 'withdraw_gold',
+      goldAmount,
+      deliveryAddress: address,
+      contact,
+      status: 'Pending',
+      createdAt: new Date(),
+    });
+
+    return res.json({
+      success: true,
+      message: `Gold withdraw request of ${goldAmount}g submitted successfully!`,
+      newGoldBalance: (availableGold - goldAmount).toFixed(3)
+    });
+
+  } catch (error) {
+    console.error('Gold Withdraw Error:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+
 
 
 // --- Start Server ---
