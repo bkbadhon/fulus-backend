@@ -36,6 +36,7 @@ let agentCollection;
 let noticeCollection;
 let dailyCollection;
 let transactionsCollection;
+let agentAddmoneyCollection;
 
 
 let isConnected = false;
@@ -56,6 +57,7 @@ async function connectToMongoDB() {
     noticeCollection = db.collection("notice");
     dailyCollection = db.collection("savings");
     transactionsCollection = db.collection("sendmoney");
+    agentAddmoneyCollection= db.collection('addmoneyAgent')
 
 
     isConnected = true;
@@ -1616,24 +1618,46 @@ app.get('/api/notice', async (req, res) => {
 
 // Get transactions by userId
 app.get('/api/transactions/:userId', async (req, res) => {
-  const { userId } = req.params;
+  try {
+    const userId = Number(req.params.userId);
 
-  const deposits = await depositCollection
-    .find({ userId: Number(userId) })
-    .sort({ createdAt: -1 })
-    .toArray();
+    // Fetch deposits
+    const deposits = await depositCollection
+      .find({ userId })
+      .sort({ createdAt: -1 })
+      .toArray();
 
-  const withdraws = await withdrawCollection
-    .find({ userId: Number(userId) })
-    .sort({ createdAt: -1 })
-    .toArray();
+    // Fetch withdraws (assuming legacy or other withdrawCollection)
+    const withdraws = await withdrawCollection
+      .find({ userId })
+      .sort({ createdAt: -1 })
+      .toArray();
 
-  // Combine and sort by date
-  const allTransactions = [...deposits.map(t => ({ ...t, type: 'deposit' })), ...withdraws.map(t => ({ ...t, type: 'withdraw' }))]
-    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    // Fetch new types of transactions
+    const transactions = await transactionsCollection
+      .find({ userId })
+      .sort({ createdAt: -1 })
+      .toArray();
 
-  res.json({ success: true, transactions: allTransactions });
+    // Tag types accordingly
+    const formattedDeposits = deposits.map(t => ({ ...t, type: 'deposit' }));
+    const formattedWithdraws = withdraws.map(t => ({ ...t, type: 'withdraw' }));
+    const formattedTransactions = transactions.map(t => ({
+      ...t,
+      type: t.type || 'transaction' // e.g. 'send', 'receive', 'withdraw_sar'
+    }));
+
+    // Combine all and sort by date descending
+    const allTransactions = [...formattedDeposits, ...formattedWithdraws, ...formattedTransactions]
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    res.json({ success: true, transactions: allTransactions });
+  } catch (error) {
+    console.error('Get transactions error:', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
 });
+
 
 app.post("/api/daily-savings/collect", async (req, res) => {
   let { userId, amount } = req.body;
@@ -2065,7 +2089,7 @@ app.post('/api/withdraw-sar', async (req, res) => {
       type: 'withdraw_sar',
       amount: withdrawAmount,
       goldUsed: goldRequired,
-      status: 'Pending',
+      status: 'Completed',
       createdAt: new Date(),
     });
 
@@ -2133,6 +2157,65 @@ app.post('/api/withdraw-gold', async (req, res) => {
   }
 });
 
+app.post('/api/agentAddMoney', async (req, res) => {
+  try {
+    const { agentId, amount, whatsApp, pin } = req.body;
+
+    // 🔍 Validate required fields
+    if (!agentId || !amount || !whatsApp || pin === undefined) {
+      return res.json({
+        success: false,
+        message: 'All fields are required: agentId, amount, whatsApp, pin'
+      });
+    }
+
+    // 🔍 Find the agent from usersCollection
+    const agent = await usersCollection.findOne({ userId: Number(agentId) });
+
+    if (!agent) {
+      return res.json({
+        success: false,
+        message: 'Agent not found!'
+      });
+    }
+
+    // 🔐 Validate transaction pin (convert both to Number)
+    const storedPin = Number(agent.transactionPin);
+    const providedPin = Number(pin);
+
+    if (storedPin !== providedPin) {
+      return res.json({
+        success: false,
+        message: 'Invalid transaction PIN!'
+      });
+    }
+
+    // 💾 Prepare data for insert
+    const addMoneyData = {
+      agentId: Number(agentId),
+      amount: Number(amount),
+      whatsApp,
+      status: 'pending', // You can later approve this
+      createdAt: new Date()
+    };
+
+    // 💾 Insert to agentAddmoneyCollection
+    const result = await agentAddmoneyCollection.insertOne(addMoneyData);
+
+    res.json({
+      success: true,
+      message: 'Money add request submitted successfully!',
+      requestId: result.insertedId
+    });
+
+  } catch (error) {
+    console.error('agentAddMoney error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal Server Error'
+    });
+  }
+});
 
 
 
