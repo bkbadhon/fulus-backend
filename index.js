@@ -786,9 +786,6 @@ app.post('/api/bonus/collect', async (req, res) => {
 });
 
 
-
-
-
 app.get('/api/users/:userId/referrals', async (req, res) => {
   try {
     const userId = Number(req.params.userId);
@@ -1166,9 +1163,6 @@ app.post('/api/withdraw', async (req, res) => {
 });
 
 
-
-
-
 app.get('/api/withdraw', async (req, res) => {
   try {
     const withdraws = await withdrawCollection.find({}).sort({ createdAt: -1 }).toArray();
@@ -1180,35 +1174,102 @@ app.get('/api/withdraw', async (req, res) => {
 });
 
 
-
-// Approve or Reject withdraw
-app.patch("/api/withdraw/:id", async (req, res) => {
+app.get("/api/withdraw/pending", async (req, res) => {
   try {
-    const { status, userId, amount } = req.body;
-    const id = req.params.id;
-
-    if (!status) return res.json({ success: false, message: "Status is required" });
-
-    // Update withdraw status
-    const result = await withdrawCollection.updateOne(
-      { _id: new ObjectId(id) },
-      { $set: { status } }
-    );
-
-    if (status === "rejected") {
-      // Refund amount to user balance
-      await usersCollection.updateOne(
-        { userId: Number(userId) },
-        { $inc: { balance: Number(amount) } }
-      );
-    }
-
-    return res.json({ success: result.modifiedCount > 0 });
+    const withdraws = await withdrawCollection.find({ status: "Pending" }).sort({ createdAt: -1 }).toArray();
+    res.json({ success: true, withdraws });
   } catch (error) {
-    console.error("Withdraw update error:", error);
-    return res.status(500).json({ success: false, message: "Internal Server Error" });
+    console.error("Failed to fetch pending withdraws:", error);
+    res.status(500).json({ success: false, message: "Server error" });
   }
 });
+
+// Agent accepts a withdraw request (status Pending => Processing)
+app.put("/api/withdraw/accept/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { agentUserId } = req.body;
+
+    if (!agentUserId) {
+      return res.status(400).json({ success: false, message: "Agent userId is required" });
+    }
+
+    const withdraw = await withdrawCollection.findOne({ _id: new ObjectId(id) });
+    if (!withdraw) return res.status(404).json({ success: false, message: "Withdraw request not found" });
+    if (withdraw.status !== "Pending") return res.status(400).json({ success: false, message: "Withdraw already processed" });
+
+    const agent = await usersCollection.findOne({ userId: agentUserId });
+    if (!agent) return res.status(404).json({ success: false, message: "Agent not found" });
+
+    // ✅ Remove balance check here — let agent accept regardless of balance
+
+    await withdrawCollection.updateOne(
+      { _id: new ObjectId(id) },
+      {
+        $set: {
+          status: "Processing",
+          agentId: agentUserId,
+          acceptedAt: new Date(),
+        }
+      }
+    );
+
+    res.json({ success: true, message: "Withdraw request accepted by agent" });
+  } catch (error) {
+    console.error("Failed to accept withdraw:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+// Mark withdraw success (Processing => Success) and pay agent commission
+app.put("/api/withdraw/success/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { agentUserId } = req.body;
+
+    if (!agentUserId) {
+      return res.status(400).json({ success: false, message: "Agent userId is required" });
+    }
+
+    const withdraw = await withdrawCollection.findOne({ _id: new ObjectId(id) });
+    if (!withdraw) return res.status(404).json({ success: false, message: "Withdraw request not found" });
+    if (withdraw.status !== "Processing") return res.status(400).json({ success: false, message: "Withdraw is not in processing state" });
+
+    const agent = await usersCollection.findOne({ userId: agentUserId });
+    if (!agent) return res.status(404).json({ success: false, message: "Agent not found" });
+
+    const commission = parseFloat((withdraw.finalAmount * 0.05).toFixed(2));
+    const totalEarned = withdraw.finalAmount + commission;
+
+    // ✅ Add withdraw amount + commission to agent's balance
+    await usersCollection.updateOne(
+      { userId: agentUserId },
+      {
+        $inc: {
+          agentBalance: totalEarned,
+        }
+      }
+    );
+
+    // Update withdraw status to success
+    await withdrawCollection.updateOne(
+      { _id: new ObjectId(id) },
+      {
+        $set: {
+          status: "Success",
+          completedAt: new Date(),
+          commission,
+        }
+      }
+    );
+
+    res.json({ success: true, message: `Withdraw completed successfully. Agent earned ${commission} SAR commission.` });
+  } catch (error) {
+    console.error("Failed to complete withdraw success:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
 
 app.post('/api/transfer', async (req, res) => {
   try {
