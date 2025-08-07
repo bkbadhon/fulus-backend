@@ -118,28 +118,16 @@ app.post("/api/users", async (req, res) => {
 
     // ✅ If sponsor exists, check balance
     let sponsor = null;
-    const requiredCharge = 599; // cost to open account
 
-    if (sponsorId) {
-      sponsor = await usersCollection.findOne({ userId: Number(sponsorId) });
+  if (sponsorId) {
+  sponsor = await usersCollection.findOne({ userId: Number(sponsorId) });
 
-      if (!sponsor) {
-        return res.status(404).json({ success: false, message: "Sponsor not found" });
-      }
+  if (!sponsor) {
+    return res.status(404).json({ success: false, message: "Sponsor not found" });
+  }
 
-      if ((sponsor.balance || 0) < requiredCharge) {
-        return res.status(400).json({
-          success: false,
-          message: `Insufficient balance. Need at least ${requiredCharge} SAR to create account.`
-        });
-      }
-
-      // ✅ Deduct balance from sponsor
-      await usersCollection.updateOne(
-        { userId: Number(sponsorId) },
-        { $inc: { balance: -requiredCharge } }
-      );
-    }
+  // Remove any balance deduction or update here — no update needed
+}
 
     // ✅ Create new user
     const newUser = {
@@ -153,7 +141,8 @@ app.post("/api/users", async (req, res) => {
       role: role || "user",
       balance: balance || 0,
       agentBalance:0,
-      chargeAmount: chargeAmount || requiredCharge,
+      status:'inactive',
+      chargeAmount: 0,
       sponsorId: sponsorId ? Number(sponsorId) : null,
     };
 
@@ -183,7 +172,7 @@ app.post("/api/users", async (req, res) => {
     const createdUser = await usersCollection.findOne({ _id: result.insertedId });
     res.status(201).json({
       success: true,
-      message: "User created and 599 SAR deducted from sponsor balance.",
+      message: "User created Successfully.",
       user: createdUser
     });
   } catch (error) {
