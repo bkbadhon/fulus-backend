@@ -1395,7 +1395,7 @@ app.put("/api/deposit/success/:id", async (req, res) => {
     const depositUser = await usersCollection.findOne({ userId: deposit.userId });
 
     if (!agent || !depositUser) return res.status(404).json({ success: false, message: "Users not found" });
-    if (agent.balance < deposit.amount) return res.status(400).json({ success: false, message: "Insufficient balance" });
+    if (agent.agentBalance < deposit.amount) return res.status(400).json({ success: false, message: "Insufficient balance" });
 
     const amount = deposit.amount;
     const commission = parseFloat((amount * 0.02).toFixed(2)); // 2% commission
