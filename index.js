@@ -492,84 +492,6 @@ app.post("/api/bonus/daily-income/:userId", async (req, res) => {
   }
 });
 
-// app.post('/api/bonus/savings/:userId', async (req, res) => {
-//   try {
-//     const userId = Number(req.params.userId);
-
-//     const savingsBonusSettings = {
-//       sponsorid: 10,
-//       ownid: 20,
-//       g2: 8,
-//       g3: 6,
-//       g4: 4,
-//       g5: 2,
-//       g6: 0,
-//       g7: 0,
-//       g8: 0,
-//       g9: 0,
-//       g10: 0,
-//     };
-
-//     // Fetch generation chain logic same as above
-//     let currentUserId = userId;
-//     const generations = {};
-
-//     for (let i = 1; i <= 10; i++) {
-//       const user = await usersCollection.findOne({ userId: currentUserId });
-//       if (!user) break;
-//       if (i === 1) generations[`g1`] = currentUserId;
-//       else {
-//         if (!user.sponsorId) break;
-//         generations[`g${i}`] = user.sponsorId;
-//         currentUserId = user.sponsorId;
-//       }
-//     }
-
-//     const bonuses = [];
-
-//     // Own savings bonus
-//     bonuses.push({
-//       userId,
-//       amount: savingsBonusSettings.ownid,
-//       reason: "Own savings bonus",
-//     });
-
-//     // Sponsor savings bonus (g1)
-//     if (generations.g2) {
-//       bonuses.push({
-//         userId: generations.g2,
-//         amount: savingsBonusSettings.sponsorid,
-//         reason: "Sponsor savings bonus (g1)",
-//       });
-//     }
-
-//     // Generations g2 to g10 savings bonuses
-//     for (let i = 2; i <= 10; i++) {
-//       const genUserId = generations[`g${i+1}`]; // offset
-//       const amount = savingsBonusSettings[`g${i}`];
-//       if (genUserId && amount > 0) {
-//         bonuses.push({
-//           userId: genUserId,
-//           amount,
-//           reason: `Savings bonus g${i}`,
-//         });
-//       }
-//     }
-
-//     // Update balances
-//     for (const b of bonuses) {
-//       await usersCollection.updateOne({ userId: b.userId }, { $inc: { balance: b.amount } });
-//     }
-
-//     res.json({ success: true, userId, generations, distributedBonuses: bonuses });
-//   } catch (error) {
-//     console.error("Savings bonus error:", error);
-//     res.status(500).json({ success: false, message: "Server error" });
-//   }
-// });
-
-
-
 
 // Recursive function to get referrals tree for a userId
 async function getReferralsTreeWithGenAndCount(userId, maxDepth = 10, currentDepth = 1) {
@@ -610,47 +532,39 @@ app.get("/api/bonus/by-generation/:userId", async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid userId" });
     }
 
-    // ✅ Decimal Bonus Values
+    // Decimal Bonus Values without 'own'
     const generationBonusSettings = {
-      own: 0.0133, gen1: 0.0133, gen2: 0.0133, gen3: 0.0133, gen4: 0.0133,
+      gen1: 0.0133, gen2: 0.0133, gen3: 0.0133, gen4: 0.0133,
       gen5: 0.0133, gen6: 0.0133, gen7: 0.0133, gen8: 0.0133, gen9: 0.0133, gen10: 0.0133
     };
 
     const dailyIncomeSettings = {
-      own: 0.0798, gen1: 0.0532, gen2: 0.0266, gen3: 0.0133, gen4: 0.0133,
+      gen1: 0.0532, gen2: 0.0266, gen3: 0.0133, gen4: 0.0133,
       gen5: 0.0133, gen6: 0.0133, gen7: 0.0133, gen8: 0.0133, gen9: 0.0133, gen10: 0.0133
     };
 
-    // Prepare response object
+    // Prepare response object without 'own'
     const bonusesByGeneration = {
-      own: [], gen1: [], gen2: [], gen3: [], gen4: [],
+      gen1: [], gen2: [], gen3: [], gen4: [],
       gen5: [], gen6: [], gen7: [], gen8: [], gen9: [], gen10: []
     };
 
-    // 1️⃣ Find main user
+    // Find main user
     const selfUser = await usersCollection.findOne({ userId });
     if (!selfUser) {
       return res.status(404).json({ success: false, message: "User not found" });
     }
 
-    // 2️⃣ Fetch collected bonuses
+    // Fetch collected bonuses
     const collectedDocs = await bonusesCollection.find({ userId }).toArray();
     const collectedMap = new Set(
       collectedDocs.map(doc => `${doc.fromUserId}-${doc.generation}`)
     );
 
-    // 3️⃣ Add own bonus
-    bonusesByGeneration.own.push({
-      userId: selfUser.userId,
-      genBonus: generationBonusSettings.own,
-      dailyBonus: dailyIncomeSettings.own,
-      bonusCollect: collectedMap.has(`${selfUser.userId}-own`),
-    });
-
-    // 4️⃣ Get referrals tree up to 10 gens
+    // Get referrals tree up to 10 gens
     const tree = await getReferralsTreeWithGenAndCount(userId, 10);
 
-    // 5️⃣ Flatten tree and assign bonuses
+    // Flatten tree and assign bonuses
     function traverseAndAssign(node) {
       for (const ref of node) {
         const genKey = ref.generation; // e.g., gen1, gen2...
@@ -676,6 +590,7 @@ app.get("/api/bonus/by-generation/:userId", async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
+
 
 
 app.post('/api/bonus/collect', async (req, res) => {
@@ -1739,7 +1654,7 @@ app.post("/api/generation/collect", async (req, res) => {
 
     res.json({
       success: true,
-      message: "1.5g gold added to your account!",
+      message: "Collected gold added to your account!",
     });
   } catch (error) {
     console.error("Error collecting gold:", error);
@@ -2206,6 +2121,92 @@ app.post('/api/agentAddMoney', async (req, res) => {
   }
 });
 
+
+app.post("/api/activate-account", async (req, res) => {
+  try {
+    const { userId, amount } = req.body;
+
+    if (!userId || !amount) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing userId or amount",
+      });
+    }
+
+    const userIdNum = Number(userId);
+
+    // Find the user
+    const user = await usersCollection.findOne({ userId: userIdNum });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    if ((user.balance || 0) < amount) {
+      return res.status(400).json({
+        success: false,
+        message: "Insufficient balance",
+      });
+    }
+
+    // Deduct amount and update status
+    const newBalance = (user.balance || 0) - amount;
+
+    await usersCollection.updateOne(
+      { userId: userIdNum },
+      {
+        $set: { status: "active" },
+        $inc: { balance: -amount },
+      }
+    );
+
+    return res.json({
+      success: true,
+      message: "Account activated successfully",
+      newBalance,
+      status: "success",
+    });
+  } catch (error) {
+    console.error("Error activating account:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
+  }
+});
+
+app.post('/api/add-bonus', async (req, res) => {
+  try {
+    const { userId, amount } = req.body;
+
+    if (!userId || !amount) {
+      return res.status(400).json({ success: false, message: 'Missing parameters' });
+    }
+
+    const userIdNum = Number(userId);
+
+    // Atomically add bonus amount to user balance
+    const updateResult = await usersCollection.updateOne(
+      { userId: userIdNum },
+      { $inc: { balance: amount } }
+    );
+
+    if (updateResult.modifiedCount === 0) {
+      return res.status(404).json({ success: false, message: 'User not found or no update performed' });
+    }
+
+    // Fetch updated user data
+    const updatedUser = await usersCollection.findOne({ userId: userIdNum });
+
+    return res.json({ success: true, balance: updatedUser.balance });
+  } catch (err) {
+    console.error('Error adding bonus:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
 
 
 // --- Start Server ---
