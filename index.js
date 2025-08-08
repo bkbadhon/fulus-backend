@@ -890,6 +890,10 @@ app.get('/api/users/:userId/rank', async (req, res) => {
 });
 
 
+
+// Utility function to sanitize keys for MongoDB (replace dots and dashes with underscores)
+const sanitizeKey = (str) => str.replace(/\./g, '_').replace(/-/g, '_');
+
 app.post('/api/users/collect-reward', async (req, res) => {
   try {
     let { userId, rank, goldAmount = 0, sarAmount = 0 } = req.body;
@@ -898,34 +902,68 @@ app.post('/api/users/collect-reward', async (req, res) => {
       return res.status(400).json({ success: false, message: "Missing required fields." });
     }
 
-    const userIdNum = typeof userId === 'string' ? Number(userId) : userId;
+    const userIdNum = Number(userId);
+    if (isNaN(userIdNum)) {
+      return res.status(400).json({ success: false, message: "Invalid userId." });
+    }
+
     goldAmount = Number(goldAmount) || 0;
     sarAmount = Number(sarAmount) || 0;
+
+    const collectedKey = `${sanitizeKey(rank)}_all`;
 
     const user = await usersCollection.findOne({ userId: userIdNum });
     if (!user) {
       return res.status(404).json({ success: false, message: "User not found." });
     }
 
-    // Check if already collected
-    const collectedKey = `${rank}-all`;
+    // Check if reward already collected
     if (user.rankBonus && user.rankBonus[collectedKey]) {
       return res.status(400).json({ success: false, message: "Reward already collected." });
     }
 
-    // Update balances
-    await usersCollection.updateOne(
-      { userId: userIdNum },
+    // Atomic update - increment balances and set reward collection key only if not exists
+    const updateResult = await usersCollection.updateOne(
+      { userId: userIdNum, [`rankBonus.${collectedKey}`]: { $exists: false } },
       {
         $inc: { balance: sarAmount, goldBalance: goldAmount },
-        $set: { [`rankBonus.${collectedKey}`]: { sar: sarAmount, gold: goldAmount } },
+        $set: { [`rankBonus.${collectedKey}`]: { sar: sarAmount, gold: goldAmount, collectedAt: new Date() } },
       }
     );
+
+    if (updateResult.modifiedCount === 0) {
+      return res.status(400).json({ success: false, message: "Reward already collected or update failed." });
+    }
 
     return res.json({ success: true, message: "SAR + Gold reward collected successfully." });
   } catch (error) {
     console.error('Collect reward error:', error);
     return res.status(500).json({ success: false, message: "Server error." });
+  }
+});
+
+app.get('/api/users/:userId/bonus-status', async (req, res) => {
+  const userId = Number(req.params.userId);
+
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return res.status(400).json({ success: false, message: "Invalid user ID" });
+  }
+
+  try {
+    const user = await usersCollection.findOne({ userId });
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    console.log('Returning rankBonus:', user.rankBonus);
+
+    return res.json({
+      success: true,
+      rankBonus: user.rankBonus || {},
+    });
+  } catch (err) {
+    console.error("Error fetching bonus status:", err);
+    res.status(500).json({ success: false, message: "Server error" });
   }
 });
 
@@ -2207,6 +2245,78 @@ app.post('/api/add-bonus', async (req, res) => {
     res.status(500).json({ success: false, message: 'Server error' });
   }
 });
+
+app.post("/api/users/activate", async (req, res) => {
+  try {
+    const { sponsorUserId, userIdToActivate } = req.body;
+
+    if (!sponsorUserId || !userIdToActivate) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing sponsorUserId or userIdToActivate",
+      });
+    }
+
+    const sponsorIdNum = Number(sponsorUserId);
+    const activateIdNum = Number(userIdToActivate);
+
+    // Fetch sponsor (the one who pays)
+    const sponsor = await usersCollection.findOne({ userId: sponsorIdNum });
+    if (!sponsor) {
+      return res.status(404).json({
+        success: false,
+        message: "Sponsor user not found",
+      });
+    }
+
+    if ((sponsor.balance || 0) < 599) {
+      return res.status(400).json({
+        success: false,
+        message: "Sponsor has insufficient balance",
+      });
+    }
+
+    // Fetch the user to activate
+    const userToActivate = await usersCollection.findOne({ userId: activateIdNum });
+    if (!userToActivate) {
+      return res.status(404).json({
+        success: false,
+        message: "User to activate not found",
+      });
+    }
+
+    if (userToActivate.status === "active") {
+      return res.status(400).json({
+        success: false,
+        message: "This account is already active",
+      });
+    }
+
+    // Update sponsor and activate user
+    await usersCollection.updateOne(
+      { userId: sponsorIdNum },
+      { $inc: { balance: -599 } }
+    );
+
+    await usersCollection.updateOne(
+      { userId: activateIdNum },
+      { $set: { status: "active" } }
+    );
+
+    return res.json({
+      success: true,
+      message: "Account activated successfully",
+      newBalance: (sponsor.balance || 0) - 599,
+    });
+  } catch (error) {
+    console.error("Error activating account:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
+  }
+});
+
 
 
 // --- Start Server ---
