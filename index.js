@@ -532,47 +532,47 @@ app.get("/api/bonus/by-generation/:userId", async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid userId" });
     }
 
-    // Decimal Bonus Values without 'own'
     const generationBonusSettings = {
       gen1: 0.0133, gen2: 0.0133, gen3: 0.0133, gen4: 0.0133,
-      gen5: 0.0133, gen6: 0.0133, gen7: 0.0133, gen8: 0.0133, gen9: 0.0133, gen10: 0.0133
+      gen5: 0.0133, gen6: 0.0133, gen7: 0.0133, gen8: 0.0133,
+      gen9: 0.0133, gen10: 0.0133
     };
 
     const dailyIncomeSettings = {
-      gen1: 0.0532, gen2: 0.0266, gen3: 0.0133, gen4: 0.0133,
-      gen5: 0.0133, gen6: 0.0133, gen7: 0.0133, gen8: 0.0133, gen9: 0.0133, gen10: 0.0133
+      gen1: 0.0798 , gen2: 0.0532, gen3: 0.0266, gen4: 0.0133,
+      gen5: 0.0133, gen6: 0.0133, gen7: 0.0133, gen8: 0.0133,
+      gen9: 0.0133, gen10: 0.0133
     };
 
-    // Prepare response object without 'own'
+    // New instant bonus (same for all gens)
+    const instantBonusValue = 2.5974;
+
     const bonusesByGeneration = {
       gen1: [], gen2: [], gen3: [], gen4: [],
       gen5: [], gen6: [], gen7: [], gen8: [], gen9: [], gen10: []
     };
 
-    // Find main user
     const selfUser = await usersCollection.findOne({ userId });
     if (!selfUser) {
       return res.status(404).json({ success: false, message: "User not found" });
     }
 
-    // Fetch collected bonuses
     const collectedDocs = await bonusesCollection.find({ userId }).toArray();
     const collectedMap = new Set(
       collectedDocs.map(doc => `${doc.fromUserId}-${doc.generation}`)
     );
 
-    // Get referrals tree up to 10 gens
     const tree = await getReferralsTreeWithGenAndCount(userId, 10);
 
-    // Flatten tree and assign bonuses
     function traverseAndAssign(node) {
       for (const ref of node) {
-        const genKey = ref.generation; // e.g., gen1, gen2...
+        const genKey = ref.generation;
         if (bonusesByGeneration[genKey]) {
           bonusesByGeneration[genKey].push({
             userId: ref.userId,
             genBonus: generationBonusSettings[genKey],
             dailyBonus: dailyIncomeSettings[genKey],
+            instantBonus: instantBonusValue, // ✅ Added here
             bonusCollect: collectedMap.has(`${ref.userId}-${genKey}`),
           });
         }
@@ -590,6 +590,7 @@ app.get("/api/bonus/by-generation/:userId", async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
+
 
 
 
@@ -611,36 +612,25 @@ app.post('/api/bonus/collect', async (req, res) => {
 
     const bonusConfig = {
       dailyBonus: {
-        own: 0.0798,
-        gen1: 0.0532,
-        gen2: 0.0266,
-        gen3: 0.0133,
-        gen4: 0.0133,
-        gen5: 0.0133,
-        gen6: 0.0133,
-        gen7: 0.0133,
-        gen8: 0.0133,
-        gen9: 0.0133,
-        gen10: 0.0133,
+        gen1: 0.0798 , gen2: 0.0532, gen3: 0.0266, gen4: 0.0133,
+        gen5: 0.0133, gen6: 0.0133, gen7: 0.0133, gen8: 0.0133,
+        gen9: 0.0133, gen10: 0.0133,
       },
       generationBonus: {
-        own: 0,
-        gen1: 0.0133,
-        gen2: 0.0133,
-        gen3: 0.0133,
-        gen4: 0.0133,
-        gen5: 0.0133,
-        gen6: 0.0133,
-        gen7: 0.0133,
-        gen8: 0.0133,
-        gen9: 0.0133,
-        gen10: 0.0133,
+        gen1: 0.0133, gen2: 0.0133, gen3: 0.0133, gen4: 0.0133,
+        gen5: 0.0133, gen6: 0.0133, gen7: 0.0133, gen8: 0.0133,
+        gen9: 0.0133, gen10: 0.0133,
       },
-
+      instantBonus: {
+        gen1: 2.5974, gen2: 2.5974, gen3: 2.5974, gen4: 2.5974,
+        gen5: 2.5974, gen6: 2.5974, gen7: 2.5974, gen8: 2.5974,
+        gen9: 2.5974, gen10: 2.5974
+      }
     };
 
     const dailyBonus = bonusConfig.dailyBonus[generation] || 0;
     const genBonus = bonusConfig.generationBonus[generation] || 0;
+    const instantBonus = bonusConfig.instantBonus[generation] || 0;
 
     // Save collected bonus record
     await bonusesCollection.updateOne(
@@ -651,6 +641,7 @@ app.post('/api/bonus/collect', async (req, res) => {
           collectedAt: new Date(),
           dailyBonus,
           genBonus,
+          instantBonus
         }
       },
       { upsert: true }
@@ -664,10 +655,11 @@ app.post('/api/bonus/collect', async (req, res) => {
       { userId },
       {
         $inc: {
-          goldBalance: dailyBonus + genBonus,
+          goldBalance: dailyBonus + genBonus + instantBonus, // ✅ Added instant bonus
           generationBonus: genBonus,
           dailyIncome: dailyBonus,
-          totalGenerationBonusCollected: genBonus
+          totalGenerationBonusCollected: genBonus,
+          totalInstantBonusCollected: instantBonus // ✅ New stat
         },
         $set: {
           memberCount: memberCount
@@ -682,7 +674,8 @@ app.post('/api/bonus/collect', async (req, res) => {
       success: true,
       message: "Bonus collected successfully",
       totalGenerationBonusCollected: updatedUser.totalGenerationBonusCollected || 0,
-      currentBalance: updatedUser.balance || 0
+      totalInstantBonusCollected: updatedUser.totalInstantBonusCollected || 0,
+      currentBalance: updatedUser.goldBalance || 0
     });
 
   } catch (error) {
@@ -690,6 +683,7 @@ app.post('/api/bonus/collect', async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
+
 
 
 app.get('/api/users/:userId/referrals', async (req, res) => {
