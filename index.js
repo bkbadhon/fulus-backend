@@ -2334,7 +2334,7 @@ app.post("/api/jobs", async (req, res) => {
       return res.status(500).json({ success: false, message: "Database not connected" });
     }
 
-    const { userId, userName, userAvatar, name, from, liveAt, experience, salary, position } = req.body;
+    const { userId, userName, userAvatar, name,contact, from, liveAt, experience, salary, position } = req.body;
 
     if (!userId || !userName || !name || !salary || !position) {
       return res.status(400).json({ success: false, message: "Missing required fields" });
@@ -2345,6 +2345,7 @@ app.post("/api/jobs", async (req, res) => {
       userName,
       userAvatar: userAvatar || null,
       name,
+      contact,
       from: from || "",
       liveAt: liveAt || "",
       experience: experience || "",
@@ -2374,7 +2375,7 @@ app.post("/api/workers", async (req, res) => {
       return res.status(500).json({ success: false, message: "Database not connected" });
     }
 
-    const { userId, userName, userAvatar, name, from, liveAt, experience, salary, position } = req.body;
+    const { userId, userName, userAvatar, name,contact, from, liveAt, experience, salary, position } = req.body;
 
     // Required fields check
     if (!userId || !userName || !name || !salary || !position) {
@@ -2386,6 +2387,7 @@ app.post("/api/workers", async (req, res) => {
       userName,
       userAvatar: userAvatar || null,
       name,
+      contact,
       from: from || "",
       liveAt: liveAt || "",
       experience: experience || "",
@@ -2458,6 +2460,7 @@ app.post("/api/marketplace/buy", async (req, res) => {
       userName,
       userAvatar,
       name,
+      contact,
       description,
       delivery,
       price,
@@ -2474,6 +2477,7 @@ app.post("/api/marketplace/buy", async (req, res) => {
       userName,
       userAvatar: userAvatar || null,
       name,
+      contact,
       description: description || "",
       delivery: delivery || "",
       location: location || "",
@@ -2508,6 +2512,7 @@ app.post("/api/marketplace/sell", async (req, res) => {
       userName,
       userAvatar,
       name,
+      contact,
       description,
       delivery,
       price,
@@ -2524,6 +2529,7 @@ app.post("/api/marketplace/sell", async (req, res) => {
       userName,
       userAvatar: userAvatar || null,
       name,
+      contact,
       description: description || "",
       delivery: delivery || "",
       location: location || "",
@@ -2598,6 +2604,7 @@ app.post("/api/humanity/needhelp", async (req, res) => {
       userName,
       userAvatar,
       name,
+      contact,
       description,
       location,
       amount
@@ -2612,6 +2619,7 @@ app.post("/api/humanity/needhelp", async (req, res) => {
       userName,
       userAvatar: userAvatar || null,
       name,
+      contact,
       description: description || "",
       location: location || "",
       amount,
@@ -2663,6 +2671,7 @@ app.post("/api/humanity/socialhelp", async (req, res) => {
       userName,
       userAvatar,
       name,
+      contact,
       description,
       location,
       amount
@@ -2677,6 +2686,7 @@ app.post("/api/humanity/socialhelp", async (req, res) => {
       userName,
       userAvatar: userAvatar || null,
       name,
+      contact,
       description: description || "",
       location: location || "",
       amount,
