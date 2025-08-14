@@ -37,6 +37,14 @@ let noticeCollection;
 let dailyCollection;
 let transactionsCollection;
 let agentAddmoneyCollection;
+let jobsCollection;
+let workersCollection;
+let buysCollection;
+let sellsCollection;
+let needHelpsCollection;
+let socialhelpsCollection;
+let problemsCollection;
+let solutionsCollection;
 
 
 let isConnected = false;
@@ -58,6 +66,14 @@ async function connectToMongoDB() {
     dailyCollection = db.collection("savings");
     transactionsCollection = db.collection("sendmoney");
     agentAddmoneyCollection= db.collection('addmoneyAgent')
+    jobsCollection= db.collection('jobs')
+    workersCollection= db.collection('workers')
+    buysCollection= db.collection('buys')
+    sellsCollection= db.collection('sells')
+    needHelpsCollection= db.collection('needhelps')
+    socialhelpsCollection= db.collection('socialhelps')
+    problemsCollection= db.collection('problems')
+    solutionsCollection= db.collection('solutions')
 
 
     isConnected = true;
@@ -2311,6 +2327,527 @@ app.post("/api/users/activate", async (req, res) => {
   }
 });
 
+// Add Job
+app.post("/api/jobs", async (req, res) => {
+  try {
+    if (!isConnected) {
+      return res.status(500).json({ success: false, message: "Database not connected" });
+    }
+
+    const { userId, userName, userAvatar, name, from, liveAt, experience, salary, position } = req.body;
+
+    if (!userId || !userName || !name || !salary || !position) {
+      return res.status(400).json({ success: false, message: "Missing required fields" });
+    }
+
+    const newJob = {
+      userId,
+      userName,
+      userAvatar: userAvatar || null,
+      name,
+      from: from || "",
+      liveAt: liveAt || "",
+      experience: experience || "",
+      salary,
+      position,
+      postedAt: new Date()
+    };
+
+    const result = await jobsCollection.insertOne(newJob);
+    res.status(201).json({
+      success: true,
+      message: "Job posted successfully",
+      jobId: result.insertedId
+    });
+
+  } catch (error) {
+    console.error("❌ Error posting job:", error.message);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+
+// Add Worker
+app.post("/api/workers", async (req, res) => {
+  try {
+    if (!isConnected) {
+      return res.status(500).json({ success: false, message: "Database not connected" });
+    }
+
+    const { userId, userName, userAvatar, name, from, liveAt, experience, salary, position } = req.body;
+
+    // Required fields check
+    if (!userId || !userName || !name || !salary || !position) {
+      return res.status(400).json({ success: false, message: "Missing required fields" });
+    }
+
+    const newWorker = {
+      userId,
+      userName,
+      userAvatar: userAvatar || null,
+      name,
+      from: from || "",
+      liveAt: liveAt || "",
+      experience: experience || "",
+      salary,
+      position,
+      postedAt: new Date()
+    };
+
+    const result = await workersCollection.insertOne(newWorker);
+    res.status(201).json({
+      success: true,
+      message: "Worker posted successfully",
+      workerId: result.insertedId
+    });
+
+  } catch (error) {
+    console.error("❌ Error posting worker:", error.message);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+// Get all jobs
+app.get("/api/jobs", async (req, res) => {
+  try {
+    if (!isConnected) {
+      return res.status(500).json({ success: false, message: "Database not connected" });
+    }
+
+    const jobs = await jobsCollection
+      .find({})
+      .sort({ postedAt: -1 }) // সর্বশেষ আগে
+      .toArray();
+
+    res.status(200).json({ success: true, data: jobs });
+  } catch (error) {
+    console.error("❌ Error fetching jobs:", error.message);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+// Get all workers
+app.get("/api/workers", async (req, res) => {
+  try {
+    if (!isConnected) {
+      return res.status(500).json({ success: false, message: "Database not connected" });
+    }
+
+    const workers = await workersCollection
+      .find({})
+      .sort({ postedAt: -1 })
+      .toArray();
+
+    res.status(200).json({ success: true, data: workers });
+  } catch (error) {
+    console.error("❌ Error fetching workers:", error.message);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+
+// Add Buy Post
+app.post("/api/marketplace/buy", async (req, res) => {
+  try {
+    if (!isConnected) {
+      return res.status(500).json({ success: false, message: "Database not connected" });
+    }
+
+    const {
+      userId,
+      userName,
+      userAvatar,
+      name,
+      description,
+      delivery,
+      price,
+      imageUrl,
+      location
+    } = req.body;
+
+    if (!userId || !userName || !name || !price || !imageUrl) {
+      return res.status(400).json({ success: false, message: "Missing required fields" });
+    }
+
+    const newBuy = {
+      userId,
+      userName,
+      userAvatar: userAvatar || null,
+      name,
+      description: description || "",
+      delivery: delivery || "",
+      location: location || "",
+      price,
+      imageUrl,
+      postedAt: new Date()
+    };
+
+    const result = await buysCollection.insertOne(newBuy);
+    res.status(201).json({
+      success: true,
+      message: "Buy request posted successfully",
+      buyId: result.insertedId
+    });
+
+  } catch (error) {
+    console.error("❌ Error posting buy request:", error.message);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+
+// Add Sell Post
+app.post("/api/marketplace/sell", async (req, res) => {
+  try {
+    if (!isConnected) {
+      return res.status(500).json({ success: false, message: "Database not connected" });
+    }
+
+    const {
+      userId,
+      userName,
+      userAvatar,
+      name,
+      description,
+      delivery,
+      price,
+      imageUrl,
+      location
+    } = req.body;
+
+    if (!userId || !userName || !name || !price || !imageUrl) {
+      return res.status(400).json({ success: false, message: "Missing required fields" });
+    }
+
+    const newSell = {
+      userId,
+      userName,
+      userAvatar: userAvatar || null,
+      name,
+      description: description || "",
+      delivery: delivery || "",
+      location: location || "",
+      price,
+      imageUrl,
+      postedAt: new Date()
+    };
+
+    const result = await sellsCollection.insertOne(newSell);
+    res.status(201).json({
+      success: true,
+      message: "Sell post created successfully",
+      sellId: result.insertedId
+    });
+
+  } catch (error) {
+    console.error("❌ Error posting sell item:", error.message);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+
+// Get all Buy Posts
+app.get("/api/marketplace/buy", async (req, res) => {
+  try {
+    if (!isConnected) {
+      return res.status(500).json({ success: false, message: "Database not connected" });
+    }
+
+    const buys = await buysCollection
+      .find({})
+      .sort({ postedAt: -1 })
+      .toArray();
+
+    res.status(200).json({ success: true, data: buys });
+  } catch (error) {
+    console.error("❌ Error fetching buy posts:", error.message);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+
+// Get all Sell Posts
+app.get("/api/marketplace/sell", async (req, res) => {
+  try {
+    if (!isConnected) {
+      return res.status(500).json({ success: false, message: "Database not connected" });
+    }
+
+    const sells = await sellsCollection
+      .find({})
+      .sort({ postedAt: -1 })
+      .toArray();
+
+    res.status(200).json({ success: true, data: sells });
+  } catch (error) {
+    console.error("❌ Error fetching sell posts:", error.message);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+// ================== NEED HELP ==================
+// Add Need Help Post
+app.post("/api/humanity/needhelp", async (req, res) => {
+  try {
+    if (!isConnected) {
+      return res.status(500).json({ success: false, message: "Database not connected" });
+    }
+
+    const {
+      userId,
+      userName,
+      userAvatar,
+      name,
+      description,
+      location,
+      amount
+    } = req.body;
+
+    if (!userId || !userName || !name || !amount) {
+      return res.status(400).json({ success: false, message: "Missing required fields" });
+    }
+
+    const newNeedHelp = {
+      userId,
+      userName,
+      userAvatar: userAvatar || null,
+      name,
+      description: description || "",
+      location: location || "",
+      amount,
+      postedAt: new Date()
+    };
+
+    const result = await needHelpsCollection.insertOne(newNeedHelp);
+    res.status(201).json({
+      success: true,
+      message: "Need Help post created successfully",
+      needHelpId: result.insertedId
+    });
+
+  } catch (error) {
+    console.error("❌ Error posting Need Help:", error.message);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+// Get all Need Help Posts
+app.get("/api/humanity/needhelp", async (req, res) => {
+  try {
+    if (!isConnected) {
+      return res.status(500).json({ success: false, message: "Database not connected" });
+    }
+
+    const needHelps = await needHelpsCollection
+      .find({})
+      .sort({ postedAt: -1 })
+      .toArray();
+
+    res.status(200).json({ success: true, data: needHelps });
+  } catch (error) {
+    console.error("❌ Error fetching Need Help posts:", error.message);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+
+// Add Social Help Post
+app.post("/api/humanity/socialhelp", async (req, res) => {
+  try {
+    if (!isConnected) {
+      return res.status(500).json({ success: false, message: "Database not connected" });
+    }
+
+    const {
+      userId,
+      userName,
+      userAvatar,
+      name,
+      description,
+      location,
+      amount
+    } = req.body;
+
+    if (!userId || !userName || !name || !amount) {
+      return res.status(400).json({ success: false, message: "Missing required fields" });
+    }
+
+    const newSocialHelp = {
+      userId,
+      userName,
+      userAvatar: userAvatar || null,
+      name,
+      description: description || "",
+      location: location || "",
+      amount,
+      postedAt: new Date()
+    };
+
+    const result = await socialhelpsCollection.insertOne(newSocialHelp);
+    res.status(201).json({
+      success: true,
+      message: "Social Help post created successfully",
+      socialHelpId: result.insertedId
+    });
+
+  } catch (error) {
+    console.error("❌ Error posting Social Help:", error.message);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+// Get all Social Help Posts
+app.get("/api/humanity/socialhelp", async (req, res) => {
+  try {
+    if (!isConnected) {
+      return res.status(500).json({ success: false, message: "Database not connected" });
+    }
+
+    const socialHelps = await socialhelpsCollection
+      .find({})
+      .sort({ postedAt: -1 })
+      .toArray();
+
+    res.status(200).json({ success: true, data: socialHelps });
+  } catch (error) {
+    console.error("❌ Error fetching Social Help posts:", error.message);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+
+// POST a new Problem
+app.post("/api/emergency/problems", async (req, res) => {
+  try {
+    if (!isConnected) {
+      return res.status(500).json({ success: false, message: "Database not connected" });
+    }
+
+    const {
+      userId,
+      userName,
+      userAvatar,
+      name,
+      contact,
+      description,
+      location,
+      amount
+    } = req.body;
+
+    if (!userId || !userName || !name || !contact) {
+      return res.status(400).json({ success: false, message: "Missing required fields" });
+    }
+
+    const newProblem = {
+      userId,
+      userName,
+      userAvatar: userAvatar || null,
+      name,
+      contact,
+      description: description || "",
+      location: location || "",
+      amount: amount || null,
+      postedAt: new Date()
+    };
+
+    const result = await problemsCollection.insertOne(newProblem);
+    res.status(201).json({
+      success: true,
+      message: "Problem post created successfully",
+      problemId: result.insertedId
+    });
+
+  } catch (error) {
+    console.error("❌ Error posting Problem:", error.message);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+// GET all Problems
+app.get("/api/emergency/problems", async (req, res) => {
+  try {
+    if (!isConnected) {
+      return res.status(500).json({ success: false, message: "Database not connected" });
+    }
+
+    const problems = await problemsCollection
+      .find({})
+      .sort({ postedAt: -1 })
+      .toArray();
+
+    res.status(200).json({ success: true, data: problems });
+  } catch (error) {
+    console.error("❌ Error fetching Problems:", error.message);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+
+// POST a new Solution
+app.post("/api/emergency/solutions", async (req, res) => {
+  try {
+    if (!isConnected) {
+      return res.status(500).json({ success: false, message: "Database not connected" });
+    }
+
+    const {
+      userId,
+      userName,
+      userAvatar,
+      name,
+      contact,
+      description,
+      location,
+      amount
+    } = req.body;
+
+    if (!userId || !userName || !name || !contact) {
+      return res.status(400).json({ success: false, message: "Missing required fields" });
+    }
+
+    const newSolution = {
+      userId,
+      userName,
+      userAvatar: userAvatar || null,
+      name,
+      contact,
+      description: description || "",
+      location: location || "",
+      amount: amount || null,
+      postedAt: new Date()
+    };
+
+    const result = await solutionsCollection.insertOne(newSolution);
+    res.status(201).json({
+      success: true,
+      message: "Solution post created successfully",
+      solutionId: result.insertedId
+    });
+
+  } catch (error) {
+    console.error("❌ Error posting Solution:", error.message);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+// GET all Solutions
+app.get("/api/emergency/solutions", async (req, res) => {
+  try {
+    if (!isConnected) {
+      return res.status(500).json({ success: false, message: "Database not connected" });
+    }
+
+    const solutions = await solutionsCollection
+      .find({})
+      .sort({ postedAt: -1 })
+      .toArray();
+
+    res.status(200).json({ success: true, data: solutions });
+  } catch (error) {
+    console.error("❌ Error fetching Solutions:", error.message);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
 
 
 // --- Start Server ---
